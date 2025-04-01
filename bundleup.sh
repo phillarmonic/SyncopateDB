@@ -2,15 +2,18 @@
 
 # Description:
 # This script searches for all .go files and go.mod file within the current directory and its subdirectories,
-# excluding the 'bundle' directory itself.
+# excluding the 'bundle' directory itself, the '.git', '.idea', and '.vscode' directories.
 # It then empties the 'bundle' directory if it exists (or creates it if it doesn't),
-# and copies all found .go files and go.mod into the 'bundle' directory.
+# copies all found .go files and go.mod into the 'bundle' directory,
+# and creates a text file with the folder structure and file listing.
 
 # Exit immediately if a command exits with a non-zero status
 set -e
 
 # Define the bundle directory name
 BUNDLE_DIR="bundle"
+# Define the structure file name
+STRUCTURE_FILE="$BUNDLE_DIR/files_folders_structure.txt"
 
 # Function to display messages
 echo_msg() {
@@ -26,9 +29,9 @@ else
     mkdir "$BUNDLE_DIR"
 fi
 
-# Step 2: Find all .go files excluding the bundle directory itself
+# Step 2: Find all .go files excluding specific directories
 echo_msg "Searching for .go files..."
-GO_FILES=$(find . -path "./$BUNDLE_DIR" -prune -o -type f -name "*.go" -print)
+GO_FILES=$(find . -path "./$BUNDLE_DIR" -prune -o -path "./.git" -prune -o -path "./.idea" -prune -o -path "./.vscode" -prune -o -type f -name "*.go" -print)
 
 # Check if any .go files were found
 if [ -z "$GO_FILES" ]; then
@@ -51,4 +54,21 @@ else
     echo_msg "No go.mod file found."
 fi
 
+# Step 5: Create a text file with folder structure and file listing
+echo_msg "Creating folder structure file..."
+{
+    echo "Folder Structure:"
+    echo "================="
+    find . -path "./$BUNDLE_DIR" -prune -o -path "./.git" -prune -o -path "./.idea" -prune -o -path "./.vscode" -prune -o -type d -print | sort
+
+    echo -e "\nFile Listing:"
+    echo "============="
+    find . -path "./$BUNDLE_DIR" -prune -o -path "./.git" -prune -o -path "./.idea" -prune -o -path "./.vscode" -prune -o -type f -print | sort
+
+    echo -e "\nBundled Files:"
+    echo "=============="
+    ls -la "$BUNDLE_DIR"
+} > "$STRUCTURE_FILE"
+
 echo_msg "All files have been bundled successfully."
+echo_msg "Folder structure and file listing saved to $STRUCTURE_FILE"
