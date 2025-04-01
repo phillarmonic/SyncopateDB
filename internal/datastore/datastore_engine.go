@@ -9,20 +9,83 @@ import (
 )
 
 // Engine provides the core functionality for storing and retrieving data
+// with added support for persistence
 type Engine struct {
 	definitions map[string]EntityDefinition
 	entities    map[string]Entity
 	indices     map[string]map[string]map[string][]string // entityType -> fieldName -> fieldValue -> []entityIDs
+	persistence PersistenceProvider                       // Interface for persistence
 	mu          sync.RWMutex
 }
 
+// PersistenceProvider defines the interface for storage backends
+type PersistenceProvider interface {
+	// Core persistence operations
+	RegisterEntityType(store *Engine, def EntityDefinition) error
+	Insert(store *Engine, entityType, entityID string, data map[string]interface{}) error
+	Update(store *Engine, entityID string, data map[string]interface{}) error
+	Delete(store *Engine, entityID string) error
+
+	// Snapshot and recovery operations
+	TakeSnapshot(store *Engine) error
+	LoadLatestSnapshot(store *Engine) error
+	LoadWAL(store *Engine) error
+
+	// Lifecycle management
+	Close() error
+}
+
+// EngineConfig holds configuration for the data store engine
+type EngineConfig struct {
+	Persistence       PersistenceProvider
+	EnablePersistence bool
+}
+
 // NewDataStoreEngine creates a new data store engine instance
-func NewDataStoreEngine() *Engine {
-	return &Engine{
+func NewDataStoreEngine(config ...EngineConfig) *Engine {
+	engine := &Engine{
 		definitions: make(map[string]EntityDefinition),
 		entities:    make(map[string]Entity),
 		indices:     make(map[string]map[string]map[string][]string),
 	}
+
+	// Apply configuration if provided
+	if len(config) > 0 {
+		if config[0].EnablePersistence && config[0].Persistence != nil {
+			engine.persistence = config[0].Persistence
+
+			// Load data from persistence
+			if err := engine.persistence.LoadLatestSnapshot(engine); err != nil {
+				// Log error but continue
+				fmt.Printf("Error loading snapshot: %v\n", err)
+			}
+
+			// Apply any WAL entries after the snapshot
+			if err := engine.persistence.LoadWAL(engine); err != nil {
+				// Log error but continue
+				fmt.Printf("Error loading WAL: %v\n", err)
+			}
+		}
+	}
+
+	return engine
+}
+
+// Close properly shuts down the engine
+func (dse *Engine) Close() error {
+	dse.mu.Lock()
+	defer dse.mu.Unlock()
+
+	if dse.persistence != nil {
+		// Take a final snapshot before closing
+		if err := dse.persistence.TakeSnapshot(dse); err != nil {
+			return fmt.Errorf("failed to take final snapshot: %w", err)
+		}
+
+		return dse.persistence.Close()
+	}
+
+	return nil
 }
 
 // RegisterEntityType registers a new entity type with the data store engine
@@ -41,6 +104,20 @@ func (dse *Engine) RegisterEntityType(def EntityDefinition) error {
 	for _, field := range def.Fields {
 		if field.Indexed {
 			dse.indices[def.Name][field.Name] = make(map[string][]string)
+		}
+	}
+
+	// Persist entity type if persistence is enabled
+	if dse.persistence != nil {
+		// We need to unlock and relock to avoid deadlock when the persistence layer calls back to the engine
+		dse.mu.Unlock()
+		err := dse.persistence.RegisterEntityType(dse, def)
+		dse.mu.Lock()
+		if err != nil {
+			// Try to clean up the in-memory state on error
+			delete(dse.definitions, def.Name)
+			delete(dse.indices, def.Name)
+			return fmt.Errorf("failed to persist entity type: %w", err)
 		}
 	}
 
@@ -104,6 +181,20 @@ func (dse *Engine) Insert(entityType string, id string, data map[string]interfac
 	// Update indices for indexed fields
 	dse.updateIndices(entity, true)
 
+	// Persist entity if persistence is enabled
+	if dse.persistence != nil {
+		// We need to unlock and relock to avoid deadlock
+		dse.mu.Unlock()
+		err := dse.persistence.Insert(dse, entityType, id, data)
+		dse.mu.Lock()
+		if err != nil {
+			// Try to clean up the in-memory state on error
+			delete(dse.entities, id)
+			dse.updateIndices(entity, false)
+			return fmt.Errorf("failed to persist entity: %w", err)
+		}
+	}
+
 	return nil
 }
 
@@ -125,6 +216,9 @@ func (dse *Engine) Update(id string, data map[string]interface{}) error {
 	// Remove old index entries
 	dse.updateIndices(entity, false)
 
+	// Keep original for rollback
+	originalEntity := entity
+
 	// Update entity
 	for k, v := range data {
 		entity.Fields[k] = v
@@ -133,6 +227,21 @@ func (dse *Engine) Update(id string, data map[string]interface{}) error {
 
 	// Add new index entries
 	dse.updateIndices(entity, true)
+
+	// Persist update if persistence is enabled
+	if dse.persistence != nil {
+		// We need to unlock and relock to avoid deadlock
+		dse.mu.Unlock()
+		err := dse.persistence.Update(dse, id, data)
+		dse.mu.Lock()
+		if err != nil {
+			// Rollback in-memory state on error
+			dse.updateIndices(entity, false)
+			dse.entities[id] = originalEntity
+			dse.updateIndices(originalEntity, true)
+			return fmt.Errorf("failed to persist entity update: %w", err)
+		}
+	}
 
 	return nil
 }
@@ -150,8 +259,25 @@ func (dse *Engine) Delete(id string) error {
 	// Remove index entries
 	dse.updateIndices(entity, false)
 
+	// Save entity for rollback
+	originalEntity := entity
+
 	// Delete the entity
 	delete(dse.entities, id)
+
+	// Persist deletion if persistence is enabled
+	if dse.persistence != nil {
+		// We need to unlock and relock to avoid deadlock
+		dse.mu.Unlock()
+		err := dse.persistence.Delete(dse, id)
+		dse.mu.Lock()
+		if err != nil {
+			// Rollback in-memory state on error
+			dse.entities[id] = originalEntity
+			dse.updateIndices(originalEntity, true)
+			return fmt.Errorf("failed to persist entity deletion: %w", err)
+		}
+	}
 
 	return nil
 }
@@ -167,6 +293,15 @@ func (dse *Engine) Get(id string) (Entity, error) {
 	}
 
 	return entity, nil
+}
+
+// ForceSnapshot immediately creates a snapshot of the current state
+func (dse *Engine) ForceSnapshot() error {
+	if dse.persistence == nil {
+		return fmt.Errorf("persistence not enabled")
+	}
+
+	return dse.persistence.TakeSnapshot(dse)
 }
 
 // GetEntityCount returns the count of entities of a specific type
