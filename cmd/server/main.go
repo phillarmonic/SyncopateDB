@@ -140,7 +140,10 @@ func insertExampleData(engine *datastore.Engine, logger *logrus.Logger) {
 		"description": "High-performance laptop with 16GB RAM and SSD",
 		"inStock":     true,
 		"releaseDate": time.Now().AddDate(0, -3, 0),
-		"categories":  []string{"electronics", "computers"},
+		// Fixed: Using map for JSON field
+		"categories": map[string]interface{}{
+			"items": []string{"electronics", "computers"},
+		},
 	}
 
 	if err := engine.Insert("product", "product-1", productData); err != nil {
@@ -157,7 +160,10 @@ func insertExampleData(engine *datastore.Engine, logger *logrus.Logger) {
 		"status":      "in_progress",
 		"priority":    1,
 		"assignedTo":  "user-1",
-		"tags":        []string{"client", "proposal", "urgent"},
+		// Fixed: Using map for JSON field
+		"tags": map[string]interface{}{
+			"items": []string{"client", "proposal", "urgent"},
+		},
 	}
 
 	if err := engine.Insert("task", "task-1", taskData); err != nil {
