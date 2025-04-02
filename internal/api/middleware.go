@@ -2,10 +2,49 @@ package api
 
 import (
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/sirupsen/logrus"
 )
+
+// RateLimiter provides thread-safe rate limiting functionality
+type RateLimiter struct {
+	requestCounts map[string]int
+	lastResetTime time.Time
+	resetInterval time.Duration
+	requestLimit  int
+	mu            sync.Mutex
+}
+
+// NewRateLimiter creates a new rate limiter
+func NewRateLimiter(limit int, interval time.Duration) *RateLimiter {
+	return &RateLimiter{
+		requestCounts: make(map[string]int),
+		lastResetTime: time.Now(),
+		resetInterval: interval,
+		requestLimit:  limit,
+	}
+}
+
+// Check checks if a request from the given IP exceeds the rate limit
+func (rl *RateLimiter) Check(ip string) bool {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+
+	// Reset counters if interval has passed
+	now := time.Now()
+	if now.Sub(rl.lastResetTime) > rl.resetInterval {
+		rl.requestCounts = make(map[string]int)
+		rl.lastResetTime = now
+	}
+
+	// Increment request count for IP
+	rl.requestCounts[ip]++
+
+	// Return true if limit is exceeded
+	return rl.requestCounts[ip] > rl.requestLimit
+}
 
 // authMiddleware handles authentication (if implemented)
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
@@ -57,29 +96,15 @@ func (s *Server) recoveryMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// rateLimitMiddleware implements rate limiting (simple implementation)
+// rateLimitMiddleware implements rate limiting with proper synchronization
 func (s *Server) rateLimitMiddleware(next http.Handler) http.Handler {
-	// A more robust implementation would use a token bucket or similar
-	var requestCounts = make(map[string]int)
-	var lastResetTime = time.Now()
-	const requestLimit = 100 // Requests per minute
-	const resetInterval = time.Minute
+	limiter := NewRateLimiter(100, time.Minute) // 100 requests per minute
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		now := time.Now()
 		ip := r.RemoteAddr
 
-		// Reset counters if interval has passed
-		if now.Sub(lastResetTime) > resetInterval {
-			requestCounts = make(map[string]int)
-			lastResetTime = now
-		}
-
-		// Increment request count for IP
-		requestCounts[ip]++
-
-		// Check if limit exceeded
-		if requestCounts[ip] > requestLimit {
+		// Check if the request exceeds the rate limit
+		if limiter.Check(ip) {
 			s.respondWithError(w, http.StatusTooManyRequests, "Rate limit exceeded")
 			return
 		}

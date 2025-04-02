@@ -136,7 +136,6 @@ func NewPersistenceEngine(config Config) (*Engine, error) {
 // Close closes the persistence engine
 func (pe *Engine) Close() error {
 	pe.mu.Lock()
-	defer pe.mu.Unlock()
 
 	// Stop the snapshot routine if running
 	if pe.snapshotTicker != nil {
@@ -144,9 +143,22 @@ func (pe *Engine) Close() error {
 		close(pe.stopSnapshot)
 	}
 
-	pe.compressor.Close()
-	pe.decompressor.Close()
-	return pe.db.Close()
+	// Get references to resources that need to be closed
+	compressor := pe.compressor
+	decompressor := pe.decompressor
+	db := pe.db
+
+	// Clear references before releasing lock
+	pe.compressor = nil
+	pe.decompressor = nil
+	pe.db = nil
+
+	pe.mu.Unlock()
+
+	// Close resources without holding the lock
+	compressor.Close()
+	decompressor.Close()
+	return db.Close()
 }
 
 // Compress compresses data using zstd
@@ -161,10 +173,7 @@ func (pe *Engine) Decompress(data []byte) ([]byte, error) {
 
 // WriteWALEntry writes an operation to the write-ahead log
 func (pe *Engine) WriteWALEntry(op int, entityType, entityID string, data []byte) error {
-	pe.mu.Lock()
-	defer pe.mu.Unlock()
-
-	// Create WAL entry
+	// Create WAL entry outside of the lock
 	entry := WALEntry{
 		Timestamp:  time.Now().UnixNano(),
 		Operation:  op,
@@ -179,17 +188,19 @@ func (pe *Engine) WriteWALEntry(op int, entityType, entityID string, data []byte
 		return fmt.Errorf("failed to encode WAL entry: %w", err)
 	}
 
-	// Write to database
+	// Create the key
 	key := fmt.Sprintf("wal:%d:%s:%s", entry.Timestamp, entityType, entityID)
+
+	// No need to lock for this DB operation - Badger handles its own thread safety
 	return pe.db.Update(func(txn *badger.Txn) error {
 		return txn.Set([]byte(key), buf.Bytes())
 	})
 }
 
 // LoadWAL loads all WAL entries and applies them to the in-memory store
+// This should only be called during initialization before the server starts
 func (pe *Engine) LoadWAL(store common.DatastoreEngine) error {
-	pe.mu.RLock()
-	defer pe.mu.RUnlock()
+	// No need for RLock here since this is called during initialization
 
 	return pe.db.View(func(txn *badger.Txn) error {
 		opts := badger.DefaultIteratorOptions
@@ -229,6 +240,7 @@ func (pe *Engine) LoadWAL(store common.DatastoreEngine) error {
 }
 
 // applyOperation applies a WAL operation to the datastore
+// This is only called during initialization
 func (pe *Engine) applyOperation(store common.DatastoreEngine, op int, entityType, entityID string, data []byte) error {
 	switch op {
 	case OpRegisterEntityType:
@@ -262,19 +274,18 @@ func (pe *Engine) applyOperation(store common.DatastoreEngine, op int, entityTyp
 
 // TakeSnapshot creates a full snapshot of the current state
 func (pe *Engine) TakeSnapshot(store common.DatastoreEngine) error {
-	pe.mu.Lock()
-	defer pe.mu.Unlock()
-
-	// Get the current timestamp
+	// Get the current timestamp and create keys outside the lock
 	timestamp := time.Now().UnixNano()
 	snapshotKey := fmt.Sprintf("snapshot:%d", timestamp)
 
-	// Serialize and compress the datastore
+	// Get entity types and definitions without locking persistence engine
+	entityTypes := store.ListEntityTypes()
+
+	// Create a buffer for serialization
 	var buf bytes.Buffer
 	enc := gob.NewEncoder(&buf)
 
 	// First, write entity definitions
-	entityTypes := store.ListEntityTypes()
 	if err := enc.Encode(len(entityTypes)); err != nil {
 		return fmt.Errorf("failed to encode entity type count: %w", err)
 	}
@@ -309,7 +320,7 @@ func (pe *Engine) TakeSnapshot(store common.DatastoreEngine) error {
 	// Compress the snapshot
 	compressedData := pe.Compress(buf.Bytes())
 
-	// Write the snapshot to the database
+	// Write the snapshot to the database - Badger handles its own thread safety
 	return pe.db.Update(func(txn *badger.Txn) error {
 		// Store the snapshot
 		if err := txn.Set([]byte(snapshotKey), compressedData); err != nil {
@@ -326,13 +337,11 @@ func (pe *Engine) TakeSnapshot(store common.DatastoreEngine) error {
 }
 
 // LoadLatestSnapshot loads the most recent snapshot
+// This should only be called during initialization
 func (pe *Engine) LoadLatestSnapshot(store common.DatastoreEngine) error {
-	pe.mu.RLock()
-	defer pe.mu.RUnlock()
-
 	var snapshotKey string
 
-	// Find the latest snapshot key
+	// Find the latest snapshot key - Badger handles its own thread safety
 	err := pe.db.View(func(txn *badger.Txn) error {
 		item, err := txn.Get([]byte("latest_snapshot"))
 		if err == badger.ErrKeyNotFound {
@@ -358,7 +367,7 @@ func (pe *Engine) LoadLatestSnapshot(store common.DatastoreEngine) error {
 		return nil
 	}
 
-	// Load the snapshot
+	// Load the snapshot - Badger handles its own thread safety
 	return pe.db.View(func(txn *badger.Txn) error {
 		item, err := txn.Get([]byte(snapshotKey))
 		if err != nil {
@@ -435,33 +444,25 @@ func (pe *Engine) startSnapshotRoutine() {
 
 // RegisterEntityType registers a new entity type and persists the definition
 func (pe *Engine) RegisterEntityType(store common.DatastoreEngine, def common.EntityDefinition) error {
-	// First register in memory
-	if err := store.RegisterEntityType(def); err != nil {
-		return err
-	}
-
-	// Then write to WAL
+	// Serialize the entity definition outside of any locks
 	var buf bytes.Buffer
 	if err := gob.NewEncoder(&buf).Encode(def); err != nil {
 		return fmt.Errorf("failed to encode entity definition: %w", err)
 	}
 
+	// Write to WAL
 	return pe.WriteWALEntry(OpRegisterEntityType, def.Name, "", buf.Bytes())
 }
 
 // Insert adds a new entity and persists it
 func (pe *Engine) Insert(store common.DatastoreEngine, entityType, entityID string, data map[string]interface{}) error {
-	// First insert in memory
-	if err := store.Insert(entityType, entityID, data); err != nil {
-		return err
-	}
-
-	// Then write to WAL
+	// Serialize the entity data outside of any locks
 	var buf bytes.Buffer
 	if err := gob.NewEncoder(&buf).Encode(data); err != nil {
 		return fmt.Errorf("failed to encode entity data: %w", err)
 	}
 
+	// Write to WAL
 	return pe.WriteWALEntry(OpInsertEntity, entityType, entityID, buf.Bytes())
 }
 
@@ -473,17 +474,13 @@ func (pe *Engine) Update(store common.DatastoreEngine, entityID string, data map
 		return err
 	}
 
-	// Update in memory
-	if err := store.Update(entityID, data); err != nil {
-		return err
-	}
-
-	// Write to WAL
+	// Serialize the update data outside of any locks
 	var buf bytes.Buffer
 	if err := gob.NewEncoder(&buf).Encode(data); err != nil {
 		return fmt.Errorf("failed to encode entity data: %w", err)
 	}
 
+	// Write to WAL
 	return pe.WriteWALEntry(OpUpdateEntity, entity.Type, entityID, buf.Bytes())
 }
 
@@ -492,11 +489,6 @@ func (pe *Engine) Delete(store common.DatastoreEngine, entityID string) error {
 	// Get the entity to determine its type
 	entity, err := store.Get(entityID)
 	if err != nil {
-		return err
-	}
-
-	// Delete from memory
-	if err := store.Delete(entityID); err != nil {
 		return err
 	}
 
@@ -558,8 +550,13 @@ func (pe *Engine) createBackup(path string) error {
 
 // RestoreFromBackup restores the database from a backup file
 func (pe *Engine) RestoreFromBackup(store common.DatastoreEngine, backupPath string) error {
+	// This is a complex operation that should be performed when the system is idle
+	// Acquire a write lock to prevent any other operations
+	pe.mu.Lock()
+	defer pe.mu.Unlock()
+
 	// Close the current database
-	if err := pe.Close(); err != nil {
+	if err := pe.db.Close(); err != nil {
 		return fmt.Errorf("failed to close database for restore: %w", err)
 	}
 
@@ -605,7 +602,7 @@ func (pe *Engine) RestoreFromBackup(store common.DatastoreEngine, backupPath str
 		return fmt.Errorf("failed to reopen database after restore: %w", err)
 	}
 
-	// Load the restored data into the store
+	// Load the restored data into the store - this is done outside normal operations
 	if err := pe.LoadLatestSnapshot(store); err != nil {
 		return fmt.Errorf("failed to load snapshot after restore: %w", err)
 	}
@@ -623,7 +620,7 @@ func (pe *Engine) StreamBackup(w io.Writer) error {
 	return err
 }
 
-// GetPersistenceProvider returns the persistence provider
-func (m *Manager) GetPersistenceProvider() common.PersistenceProvider {
-	return m.persistence
+// GetPersistenceProvider returns the persistence provider for the Manager
+func (pe *Engine) GetPersistenceProvider() common.PersistenceProvider {
+	return pe
 }

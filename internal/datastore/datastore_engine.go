@@ -39,7 +39,8 @@ func NewDataStoreEngine(config ...EngineConfig) *Engine {
 		if config[0].EnablePersistence && config[0].Persistence != nil {
 			engine.persistence = config[0].Persistence
 
-			// Load data from persistence
+			// Load data from persistence - this happens before the server starts
+			// handling requests, so we don't need to worry about concurrency yet
 			if err := engine.persistence.LoadLatestSnapshot(engine); err != nil {
 				// Log error but continue
 				fmt.Printf("Error loading snapshot: %v\n", err)
@@ -62,12 +63,23 @@ func (dse *Engine) Close() error {
 	defer dse.mu.Unlock()
 
 	if dse.persistence != nil {
-		// Take a final snapshot before closing
-		if err := dse.persistence.TakeSnapshot(dse); err != nil {
+		// Instead of using persistence while holding the lock, we release it
+		persistenceProvider := dse.persistence
+		dse.mu.Unlock()
+
+		// Take a final snapshot without holding the lock
+		if err := persistenceProvider.TakeSnapshot(dse); err != nil {
+			// Reacquire the lock before returning
+			dse.mu.Lock()
 			return fmt.Errorf("failed to take final snapshot: %w", err)
 		}
 
-		return dse.persistence.Close()
+		// Close the persistence provider without holding the lock
+		err := persistenceProvider.Close()
+
+		// Reacquire the lock before returning
+		dse.mu.Lock()
+		return err
 	}
 
 	return nil
@@ -75,13 +87,25 @@ func (dse *Engine) Close() error {
 
 // RegisterEntityType registers a new entity type with the data store engine
 func (dse *Engine) RegisterEntityType(def common.EntityDefinition) error {
-	dse.mu.Lock()
-	defer dse.mu.Unlock()
+	// First check if entity type already exists without modifying state
+	dse.mu.RLock()
+	_, exists := dse.definitions[def.Name]
+	dse.mu.RUnlock()
 
-	if _, exists := dse.definitions[def.Name]; exists {
+	if exists {
 		return fmt.Errorf("entity type %s already exists", def.Name)
 	}
 
+	// Now acquire write lock for modification
+	dse.mu.Lock()
+
+	// Double-check existence after acquiring write lock
+	if _, exists := dse.definitions[def.Name]; exists {
+		dse.mu.Unlock()
+		return fmt.Errorf("entity type %s already exists", def.Name)
+	}
+
+	// Update in-memory state
 	dse.definitions[def.Name] = def
 	dse.indices[def.Name] = make(map[string]map[string][]string)
 
@@ -92,17 +116,22 @@ func (dse *Engine) RegisterEntityType(def common.EntityDefinition) error {
 		}
 	}
 
+	// Release lock before persistence operation
+	dse.mu.Unlock()
+
 	// Persist entity type if persistence is enabled
+	var persistErr error
 	if dse.persistence != nil {
-		// We need to unlock and relock to avoid deadlock when the persistence layer calls back to the engine
-		dse.mu.Unlock()
-		err := dse.persistence.RegisterEntityType(dse, def)
-		dse.mu.Lock()
-		if err != nil {
-			// Try to clean up the in-memory state on error
+		persistErr = dse.persistence.RegisterEntityType(dse, def)
+
+		// If persistence fails, we need to clean up the in-memory state
+		if persistErr != nil {
+			dse.mu.Lock()
 			delete(dse.definitions, def.Name)
 			delete(dse.indices, def.Name)
-			return fmt.Errorf("failed to persist entity type: %w", err)
+			dse.mu.Unlock()
+
+			return fmt.Errorf("failed to persist entity type: %w", persistErr)
 		}
 	}
 
@@ -135,47 +164,77 @@ func (dse *Engine) ListEntityTypes() []string {
 	return types
 }
 
-// Insert adds a new entity to the data store engine
-func (dse *Engine) Insert(entityType string, id string, data map[string]interface{}) error {
-	dse.mu.Lock()
-	defer dse.mu.Unlock()
-
+// prepareEntityForInsert validates and prepares an entity for insertion
+// This function requires that the caller holds a read lock
+func (dse *Engine) prepareEntityForInsert(entityType string, id string, data map[string]interface{}) (common.Entity, error) {
 	// Check if entity type is registered
 	if _, exists := dse.definitions[entityType]; !exists {
-		return fmt.Errorf("entity type %s not registered", entityType)
+		return common.Entity{}, fmt.Errorf("entity type %s not registered", entityType)
 	}
 
 	// Validate data against entity definition
 	if err := dse.validateEntityData(entityType, data); err != nil {
-		return err
+		return common.Entity{}, err
 	}
 
 	// Check if ID already exists
 	if _, exists := dse.entities[id]; exists {
-		return fmt.Errorf("entity with ID %s already exists", id)
+		return common.Entity{}, fmt.Errorf("entity with ID %s already exists", id)
 	}
 
-	// Create and store the entity
-	entity := common.Entity{
+	// Create the entity
+	return common.Entity{
 		ID:     id,
 		Type:   entityType,
 		Fields: data,
-	}
-	dse.entities[id] = entity
+	}, nil
+}
 
-	// Update indices for indexed fields
+// Insert adds a new entity to the data store engine
+func (dse *Engine) Insert(entityType string, id string, data map[string]interface{}) error {
+	// First validate without taking a write lock
+	dse.mu.RLock()
+	entity, err := dse.prepareEntityForInsert(entityType, id, data)
+	dse.mu.RUnlock()
+
+	if err != nil {
+		return err
+	}
+
+	// Now take write lock and check again to handle race conditions
+	dse.mu.Lock()
+
+	// Check again if entity type exists and ID is unique under write lock
+	if _, exists := dse.definitions[entityType]; !exists {
+		dse.mu.Unlock()
+		return fmt.Errorf("entity type %s not registered", entityType)
+	}
+
+	if _, exists := dse.entities[id]; exists {
+		dse.mu.Unlock()
+		return fmt.Errorf("entity with ID %s already exists", id)
+	}
+
+	// Store the entity and update indices
+	dse.entities[id] = entity
 	dse.updateIndices(entity, true)
 
+	// Store reference to persistence provider and release lock
+	persistenceProvider := dse.persistence
+	dse.mu.Unlock()
+
 	// Persist entity if persistence is enabled
-	if dse.persistence != nil {
-		// We need to unlock and relock to avoid deadlock
-		dse.mu.Unlock()
-		err := dse.persistence.Insert(dse, entityType, id, data)
-		dse.mu.Lock()
-		if err != nil {
-			// Try to clean up the in-memory state on error
+	if persistenceProvider != nil {
+		if err := persistenceProvider.Insert(dse, entityType, id, data); err != nil {
+			// If persistence fails, we need to remove the entity from memory
+			dse.mu.Lock()
 			delete(dse.entities, id)
+			// Update indices needs the entity to still be in entities, so we add it back temporarily
+			dse.entities[id] = entity
 			dse.updateIndices(entity, false)
+			delete(dse.entities, id)
+			dse.mu.Unlock()
+
 			return fmt.Errorf("failed to persist entity: %w", err)
 		}
 	}
@@ -185,24 +244,45 @@ func (dse *Engine) Insert(entityType string, id string, data map[string]interfac
 
 // Update updates an existing entity in the data store engine
 func (dse *Engine) Update(id string, data map[string]interface{}) error {
-	dse.mu.Lock()
-	defer dse.mu.Unlock()
-
+	// First read the current state without write lock
+	dse.mu.RLock()
 	entity, exists := dse.entities[id]
 	if !exists {
+		dse.mu.RUnlock()
 		return fmt.Errorf("entity with ID %s not found", id)
 	}
 
-	// Validate data against entity definition
+	// Validate the update data
 	if err := dse.validateEntityData(entity.Type, data); err != nil {
+		dse.mu.RUnlock()
 		return err
+	}
+
+	// Make a deep copy of the original entity for rollback
+	originalEntity := common.Entity{
+		ID:     entity.ID,
+		Type:   entity.Type,
+		Fields: make(map[string]interface{}),
+	}
+
+	for k, v := range entity.Fields {
+		originalEntity.Fields[k] = v
+	}
+
+	dse.mu.RUnlock()
+
+	// Now acquire write lock for the update
+	dse.mu.Lock()
+
+	// Check again if the entity exists
+	entity, exists = dse.entities[id]
+	if !exists {
+		dse.mu.Unlock()
+		return fmt.Errorf("entity with ID %s not found", id)
 	}
 
 	// Remove old index entries
 	dse.updateIndices(entity, false)
-
-	// Keep original for rollback
-	originalEntity := entity
 
 	// Update entity
 	for k, v := range data {
@@ -213,17 +293,24 @@ func (dse *Engine) Update(id string, data map[string]interface{}) error {
 	// Add new index entries
 	dse.updateIndices(entity, true)
 
+	// Store reference to persistence provider and entity type
+	persistenceProvider := dse.persistence
+	dse.mu.Unlock()
+
 	// Persist update if persistence is enabled
-	if dse.persistence != nil {
-		// We need to unlock and relock to avoid deadlock
-		dse.mu.Unlock()
-		err := dse.persistence.Update(dse, id, data)
-		dse.mu.Lock()
-		if err != nil {
+	if persistenceProvider != nil {
+		if err := persistenceProvider.Update(dse, id, data); err != nil {
 			// Rollback in-memory state on error
+			dse.mu.Lock()
+			// Remove updated indices
+			entity = dse.entities[id]
 			dse.updateIndices(entity, false)
+
+			// Restore original entity
 			dse.entities[id] = originalEntity
 			dse.updateIndices(originalEntity, true)
+			dse.mu.Unlock()
+
 			return fmt.Errorf("failed to persist entity update: %w", err)
 		}
 	}
@@ -233,33 +320,56 @@ func (dse *Engine) Update(id string, data map[string]interface{}) error {
 
 // Delete removes an entity from the data store engine
 func (dse *Engine) Delete(id string) error {
-	dse.mu.Lock()
-	defer dse.mu.Unlock()
-
+	// First read the current state without write lock
+	dse.mu.RLock()
 	entity, exists := dse.entities[id]
 	if !exists {
+		dse.mu.RUnlock()
+		return fmt.Errorf("entity with ID %s not found", id)
+	}
+
+	// Make a copy of the entity for rollback
+	originalEntity := common.Entity{
+		ID:     entity.ID,
+		Type:   entity.Type,
+		Fields: make(map[string]interface{}),
+	}
+
+	for k, v := range entity.Fields {
+		originalEntity.Fields[k] = v
+	}
+
+	dse.mu.RUnlock()
+
+	// Now acquire write lock for the deletion
+	dse.mu.Lock()
+
+	// Check again if the entity exists
+	entity, exists = dse.entities[id]
+	if !exists {
+		dse.mu.Unlock()
 		return fmt.Errorf("entity with ID %s not found", id)
 	}
 
 	// Remove index entries
 	dse.updateIndices(entity, false)
 
-	// Save entity for rollback
-	originalEntity := entity
-
 	// Delete the entity
 	delete(dse.entities, id)
 
+	// Store reference to persistence provider and release lock
+	persistenceProvider := dse.persistence
+	dse.mu.Unlock()
+
 	// Persist deletion if persistence is enabled
-	if dse.persistence != nil {
-		// We need to unlock and relock to avoid deadlock
-		dse.mu.Unlock()
-		err := dse.persistence.Delete(dse, id)
-		dse.mu.Lock()
-		if err != nil {
+	if persistenceProvider != nil {
+		if err := persistenceProvider.Delete(dse, id); err != nil {
 			// Rollback in-memory state on error
+			dse.mu.Lock()
 			dse.entities[id] = originalEntity
 			dse.updateIndices(originalEntity, true)
+			dse.mu.Unlock()
+
 			return fmt.Errorf("failed to persist entity deletion: %w", err)
 		}
 	}

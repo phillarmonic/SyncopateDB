@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -23,6 +24,8 @@ type ServerConfig struct {
 	WriteTimeout time.Duration
 	IdleTimeout  time.Duration
 	LogLevel     logrus.Level
+	RateLimit    int           // Requests per minute per IP
+	RateWindow   time.Duration // Rate limit window (usually 1 minute)
 }
 
 // DefaultServerConfig returns a default server configuration
@@ -33,6 +36,8 @@ func DefaultServerConfig() ServerConfig {
 		WriteTimeout: 15 * time.Second,
 		IdleTimeout:  60 * time.Second,
 		LogLevel:     logrus.InfoLevel,
+		RateLimit:    100,         // 100 requests per minute per IP
+		RateWindow:   time.Minute, // 1 minute window
 	}
 }
 
@@ -44,6 +49,8 @@ type Server struct {
 	engine       common.DatastoreEngine
 	queryService *datastore.QueryService
 	logger       *logrus.Logger
+	rateLimiter  *RateLimiter
+	mu           sync.RWMutex // Protect response writers in concurrent handlers
 }
 
 // NewServer creates a new REST API server
@@ -58,6 +65,7 @@ func NewServer(engine common.DatastoreEngine, queryService *datastore.QueryServi
 		engine:       engine,
 		queryService: queryService,
 		logger:       logger,
+		rateLimiter:  NewRateLimiter(config.RateLimit, config.RateWindow),
 	}
 
 	server.setupRoutes()
@@ -102,11 +110,19 @@ func (s *Server) Start() error {
 		MaxAge:           86400, // 24 hours
 	})
 
+	// Create a chain of middleware
+	handler := c.Handler(s.router)
+	handler = s.logMiddleware(handler)
+	handler = s.rateLimitMiddleware(handler)
+	handler = s.securityHeadersMiddleware(handler)
+	handler = s.requestIDMiddleware(handler)
+	handler = s.recoveryMiddleware(handler)
+
 	// Create HTTP server
 	addr := fmt.Sprintf(":%d", s.config.Port)
 	s.server = &http.Server{
 		Addr:         addr,
-		Handler:      c.Handler(s.logMiddleware(s.router)),
+		Handler:      handler,
 		ReadTimeout:  s.config.ReadTimeout,
 		WriteTimeout: s.config.WriteTimeout,
 		IdleTimeout:  s.config.IdleTimeout,

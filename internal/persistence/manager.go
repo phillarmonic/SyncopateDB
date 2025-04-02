@@ -1,6 +1,7 @@
 package persistence
 
 import (
+	"sync"
 	"time"
 
 	"github.com/phillarmonic/syncopate-db/internal/common"
@@ -14,6 +15,7 @@ type Manager struct {
 	logger      *logrus.Logger
 	gcTicker    *time.Ticker
 	stopGC      chan struct{}
+	mu          sync.RWMutex // Protect access to engine
 }
 
 // NewManager creates a new persistence manager
@@ -41,11 +43,15 @@ func NewManager(config Config) (*Manager, error) {
 
 // SetEngine sets the datastore engine
 func (m *Manager) SetEngine(engine common.DatastoreEngine) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.engine = engine
 }
 
 // Engine returns the datastore engine
 func (m *Manager) Engine() common.DatastoreEngine {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	return m.engine
 }
 
@@ -65,7 +71,15 @@ func (m *Manager) Close() error {
 
 // ForceSnapshot forces an immediate snapshot
 func (m *Manager) ForceSnapshot() error {
-	return m.persistence.TakeSnapshot(m.engine)
+	m.mu.RLock()
+	engine := m.engine
+	m.mu.RUnlock()
+
+	if engine == nil {
+		return nil // No engine set yet
+	}
+
+	return m.persistence.TakeSnapshot(engine)
 }
 
 // RunValueLogGC runs garbage collection on the value log
@@ -139,14 +153,24 @@ func (m *Manager) GetDatabaseSize() (int64, error) {
 
 // GetStorageStats returns statistics about storage usage
 func (m *Manager) GetStorageStats() map[string]interface{} {
+	m.mu.RLock()
+	engine := m.engine
+	m.mu.RUnlock()
+
+	if engine == nil {
+		return map[string]interface{}{
+			"status": "engine not set",
+		}
+	}
+
 	stats := map[string]interface{}{
-		"entity_types_count": len(m.engine.ListEntityTypes()),
+		"entity_types_count": len(engine.ListEntityTypes()),
 	}
 
 	// Add entity counts by type
 	entityTypeStats := make(map[string]int)
-	for _, typeName := range m.engine.ListEntityTypes() {
-		count, err := m.engine.GetEntityCount(typeName)
+	for _, typeName := range engine.ListEntityTypes() {
+		count, err := engine.GetEntityCount(typeName)
 		if err == nil {
 			entityTypeStats[typeName] = count
 		} else {
@@ -181,4 +205,9 @@ func (m *Manager) Backup(path string) error {
 func (m *Manager) RunCompaction() error {
 	// In Badger v4, we can use Flatten() directly without checking for disabled compaction
 	return m.persistence.db.Flatten(1)
+}
+
+// GetPersistenceProvider returns the persistence provider
+func (m *Manager) GetPersistenceProvider() common.PersistenceProvider {
+	return m.persistence
 }
