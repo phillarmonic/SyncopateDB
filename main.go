@@ -23,6 +23,7 @@ func main() {
 	cacheSize := flag.Int("cache-size", 10000, "Number of entities to cache in memory")
 	snapshotInterval := flag.Int("snapshot-interval", 600, "Snapshot interval in seconds")
 	syncWrites := flag.Bool("sync-writes", true, "Sync writes to disk immediately")
+	debugMode := flag.Bool("debug", false, "Enable debug mode (disables goroutines for easier debugging)")
 	flag.Parse()
 
 	// Set up logging
@@ -33,6 +34,10 @@ func main() {
 	}
 	logger.SetLevel(level)
 	logger.SetFormatter(&logrus.JSONFormatter{})
+
+	if *debugMode {
+		logger.Info("Debug mode enabled - server will run synchronously")
+	}
 
 	var engine *datastore.Engine
 	var queryService *datastore.QueryService
@@ -99,6 +104,9 @@ func main() {
 		WriteTimeout: 15 * time.Second,
 		IdleTimeout:  60 * time.Second,
 		LogLevel:     level,
+		RateLimit:    100,         // 100 requests per minute per IP
+		RateWindow:   time.Minute, // 1 minute window
+		DebugMode:    *debugMode,  // Set debug mode from command-line flag
 	}
 
 	server := api.NewServer(engine, queryService, serverConfig)
@@ -109,7 +117,7 @@ func main() {
 		fmt.Println("Press Ctrl+C to exit and save data")
 	}
 
-	logger.Fatal(server.Start())
+	logger.Info(server.Start())
 }
 
 // runGarbageCollection periodically runs Badger garbage collection

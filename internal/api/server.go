@@ -26,6 +26,7 @@ type ServerConfig struct {
 	LogLevel     logrus.Level
 	RateLimit    int           // Requests per minute per IP
 	RateWindow   time.Duration // Rate limit window (usually 1 minute)
+	DebugMode    bool          // Flag to enable debug mode (disables goroutines)
 }
 
 // DefaultServerConfig returns a default server configuration
@@ -38,6 +39,7 @@ func DefaultServerConfig() ServerConfig {
 		LogLevel:     logrus.InfoLevel,
 		RateLimit:    100,         // 100 requests per minute per IP
 		RateWindow:   time.Minute, // 1 minute window
+		DebugMode:    false,       // Debug mode disabled by default
 	}
 }
 
@@ -97,6 +99,35 @@ func (s *Server) setupRoutes() {
 
 	// Health check
 	s.router.HandleFunc("/health", s.handleHealthCheck).Methods(http.MethodGet)
+
+	// Add a debug endpoint if in debug mode
+	if s.config.DebugMode {
+		s.router.HandleFunc("/debug", s.handleDebug).Methods(http.MethodGet)
+	}
+}
+
+// handleDebug provides a debug endpoint for testing when in debug mode
+func (s *Server) handleDebug(w http.ResponseWriter, r *http.Request) {
+	// Example debug info - you can modify this to include whatever diagnostics you need
+	debugInfo := map[string]interface{}{
+		"serverTime":   time.Now().Format(time.RFC3339),
+		"entityTypes":  s.engine.ListEntityTypes(),
+		"debugMode":    s.config.DebugMode,
+		"goroutines":   "main thread only", // Since we're in debug mode
+		"requestPath":  r.URL.Path,
+		"requestQuery": r.URL.RawQuery,
+		"requestHeaders": func() map[string]string {
+			headers := make(map[string]string)
+			for name, values := range r.Header {
+				if len(values) > 0 {
+					headers[name] = values[0]
+				}
+			}
+			return headers
+		}(),
+	}
+
+	s.respondWithJSON(w, http.StatusOK, debugInfo, true)
 }
 
 // Start initializes and starts the server
@@ -128,30 +159,38 @@ func (s *Server) Start() error {
 		IdleTimeout:  s.config.IdleTimeout,
 	}
 
-	// Start server in a goroutine
-	go func() {
-		s.logger.Infof("Starting server on %s", addr)
-		if err := s.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			s.logger.Fatalf("Could not start server: %v", err)
+	if s.config.DebugMode {
+		// Debug mode: run server in the main thread to allow easier debugging
+		s.logger.Info("Starting server in DEBUG mode (synchronous) on " + addr)
+		return s.server.ListenAndServe()
+	} else {
+		// Normal mode: run server in a goroutine with graceful shutdown
+		s.logger.Info("Starting server in NORMAL mode (with goroutine) on " + addr)
+
+		// Start server in a goroutine
+		go func() {
+			if err := s.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				s.logger.Fatalf("Could not start server: %v", err)
+			}
+		}()
+
+		// Wait for interrupt signal to gracefully shut down the server
+		quit := make(chan os.Signal, 1)
+		signal.Notify(quit, os.Interrupt)
+		<-quit
+
+		s.logger.Info("Server is shutting down...")
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		if err := s.server.Shutdown(ctx); err != nil {
+			s.logger.Fatalf("Server shutdown error: %v", err)
+			return err
 		}
-	}()
 
-	// Wait for interrupt signal to gracefully shut down the server
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, os.Interrupt)
-	<-quit
-
-	s.logger.Info("Server is shutting down...")
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	if err := s.server.Shutdown(ctx); err != nil {
-		s.logger.Fatalf("Server shutdown error: %v", err)
-		return err
+		s.logger.Info("Server gracefully stopped")
+		return nil
 	}
-
-	s.logger.Info("Server gracefully stopped")
-	return nil
 }
 
 // logMiddleware logs information about each request

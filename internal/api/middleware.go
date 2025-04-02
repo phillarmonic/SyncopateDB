@@ -46,6 +46,12 @@ func (rl *RateLimiter) Check(ip string) bool {
 	return rl.requestCounts[ip] > rl.requestLimit
 }
 
+// generateRequestID creates a unique request ID
+func generateRequestID() string {
+	// A more robust implementation would use UUID
+	return time.Now().Format("20060102150405.000000")
+}
+
 // authMiddleware handles authentication (if implemented)
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -98,7 +104,7 @@ func (s *Server) recoveryMiddleware(next http.Handler) http.Handler {
 
 // rateLimitMiddleware implements rate limiting with proper synchronization
 func (s *Server) rateLimitMiddleware(next http.Handler) http.Handler {
-	limiter := NewRateLimiter(100, time.Minute) // 100 requests per minute
+	limiter := NewRateLimiter(100, time.Minute) // 100 requests per minute per IP
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ip := r.RemoteAddr
@@ -111,10 +117,4 @@ func (s *Server) rateLimitMiddleware(next http.Handler) http.Handler {
 
 		next.ServeHTTP(w, r)
 	})
-}
-
-// generateRequestID creates a unique request ID
-func generateRequestID() string {
-	// A more robust implementation would use UUID
-	return time.Now().Format("20060102150405.000000")
 }
