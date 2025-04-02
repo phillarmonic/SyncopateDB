@@ -6,46 +6,31 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/phillarmonic/syncopate-db/internal/common"
 )
 
 // Engine provides the core functionality for storing and retrieving data
-// with added support for persistence
+// and implements the common.DatastoreEngine interface
 type Engine struct {
-	definitions map[string]EntityDefinition
-	entities    map[string]Entity
-	indices     map[string]map[string]map[string][]string // entityType -> fieldName -> fieldValue -> []entityIDs
-	persistence PersistenceProvider                       // Interface for persistence
+	definitions map[string]common.EntityDefinition
+	entities    map[string]common.Entity
+	indices     map[string]map[string]map[string][]string
+	persistence common.PersistenceProvider
 	mu          sync.RWMutex
-}
-
-// PersistenceProvider defines the interface for storage backends
-type PersistenceProvider interface {
-	// Core persistence operations
-	RegisterEntityType(store *Engine, def EntityDefinition) error
-	Insert(store *Engine, entityType, entityID string, data map[string]interface{}) error
-	Update(store *Engine, entityID string, data map[string]interface{}) error
-	Delete(store *Engine, entityID string) error
-
-	// Snapshot and recovery operations
-	TakeSnapshot(store *Engine) error
-	LoadLatestSnapshot(store *Engine) error
-	LoadWAL(store *Engine) error
-
-	// Lifecycle management
-	Close() error
 }
 
 // EngineConfig holds configuration for the data store engine
 type EngineConfig struct {
-	Persistence       PersistenceProvider
+	Persistence       common.PersistenceProvider
 	EnablePersistence bool
 }
 
 // NewDataStoreEngine creates a new data store engine instance
 func NewDataStoreEngine(config ...EngineConfig) *Engine {
 	engine := &Engine{
-		definitions: make(map[string]EntityDefinition),
-		entities:    make(map[string]Entity),
+		definitions: make(map[string]common.EntityDefinition),
+		entities:    make(map[string]common.Entity),
 		indices:     make(map[string]map[string]map[string][]string),
 	}
 
@@ -89,7 +74,7 @@ func (dse *Engine) Close() error {
 }
 
 // RegisterEntityType registers a new entity type with the data store engine
-func (dse *Engine) RegisterEntityType(def EntityDefinition) error {
+func (dse *Engine) RegisterEntityType(def common.EntityDefinition) error {
 	dse.mu.Lock()
 	defer dse.mu.Unlock()
 
@@ -125,13 +110,13 @@ func (dse *Engine) RegisterEntityType(def EntityDefinition) error {
 }
 
 // GetEntityDefinition returns the definition for a specific entity type
-func (dse *Engine) GetEntityDefinition(entityType string) (EntityDefinition, error) {
+func (dse *Engine) GetEntityDefinition(entityType string) (common.EntityDefinition, error) {
 	dse.mu.RLock()
 	defer dse.mu.RUnlock()
 
 	def, exists := dse.definitions[entityType]
 	if !exists {
-		return EntityDefinition{}, fmt.Errorf("entity type %s not registered", entityType)
+		return common.EntityDefinition{}, fmt.Errorf("entity type %s not registered", entityType)
 	}
 
 	return def, nil
@@ -171,7 +156,7 @@ func (dse *Engine) Insert(entityType string, id string, data map[string]interfac
 	}
 
 	// Create and store the entity
-	entity := Entity{
+	entity := common.Entity{
 		ID:     id,
 		Type:   entityType,
 		Fields: data,
@@ -283,13 +268,13 @@ func (dse *Engine) Delete(id string) error {
 }
 
 // Get retrieves an entity by ID
-func (dse *Engine) Get(id string) (Entity, error) {
+func (dse *Engine) Get(id string) (common.Entity, error) {
 	dse.mu.RLock()
 	defer dse.mu.RUnlock()
 
 	entity, exists := dse.entities[id]
 	if !exists {
-		return Entity{}, fmt.Errorf("entity with ID %s not found", id)
+		return common.Entity{}, fmt.Errorf("entity with ID %s not found", id)
 	}
 
 	return entity, nil
@@ -324,7 +309,7 @@ func (dse *Engine) GetEntityCount(entityType string) (int, error) {
 }
 
 // GetAllEntitiesOfType retrieves all entities of a specific type
-func (dse *Engine) GetAllEntitiesOfType(entityType string) ([]Entity, error) {
+func (dse *Engine) GetAllEntitiesOfType(entityType string) ([]common.Entity, error) {
 	dse.mu.RLock()
 	defer dse.mu.RUnlock()
 
@@ -332,7 +317,7 @@ func (dse *Engine) GetAllEntitiesOfType(entityType string) ([]Entity, error) {
 		return nil, fmt.Errorf("entity type %s not registered", entityType)
 	}
 
-	entities := make([]Entity, 0)
+	entities := make([]common.Entity, 0)
 	for _, entity := range dse.entities {
 		if entity.Type == entityType {
 			entities = append(entities, entity)
@@ -343,7 +328,7 @@ func (dse *Engine) GetAllEntitiesOfType(entityType string) ([]Entity, error) {
 }
 
 // updateIndices adds or removes index entries for an entity
-func (dse *Engine) updateIndices(entity Entity, add bool) {
+func (dse *Engine) updateIndices(entity common.Entity, add bool) {
 	def := dse.definitions[entity.Type]
 	for _, fieldDef := range def.Fields {
 		if fieldDef.Indexed {
@@ -394,4 +379,15 @@ func (dse *Engine) getIndexableValue(value interface{}) string {
 	default:
 		return fmt.Sprintf("%v", v)
 	}
+}
+
+// ForceGarbageCollection runs garbage collection on the underlying Badger DB
+func (dse *Engine) ForceGarbageCollection(discardRatio float64) error {
+	if dse.persistence == nil {
+		return fmt.Errorf("persistence not enabled")
+	}
+
+	// This requires a type assertion which might break the abstraction
+	// You might want to add a RunGarbageCollection method to the common.PersistenceProvider interface
+	return fmt.Errorf("garbage collection not supported through the interface")
 }

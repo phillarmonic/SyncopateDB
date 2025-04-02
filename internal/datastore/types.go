@@ -1,5 +1,7 @@
 package datastore
 
+import "github.com/phillarmonic/syncopate-db/internal/common"
+
 // Field types supported by the data store
 const (
 	TypeBoolean  = "boolean"
@@ -27,27 +29,6 @@ const (
 	FilterFuzzy      = "fuzzy"
 )
 
-// FieldDefinition defines a field's name and type
-type FieldDefinition struct {
-	Name     string `json:"name"`
-	Type     string `json:"type"`
-	Indexed  bool   `json:"indexed"`
-	Required bool   `json:"required"`
-}
-
-// EntityDefinition defines an entity's structure with fields
-type EntityDefinition struct {
-	Name   string            `json:"name"`
-	Fields []FieldDefinition `json:"fields"`
-}
-
-// Entity represents a concrete instance with data
-type Entity struct {
-	ID     string                 `json:"id"`
-	Type   string                 `json:"type"`
-	Fields map[string]interface{} `json:"fields"`
-}
-
 // QueryOptions defines parameters for running a query
 type QueryOptions struct {
 	EntityType string              `json:"entityType"`
@@ -74,11 +55,11 @@ type FuzzySearchOptions struct {
 
 // PaginatedResponse represents a paginated result of entities
 type PaginatedResponse struct {
-	Data       []Entity `json:"data"`
-	Total      int      `json:"total"`
-	Count      int      `json:"count"`
-	Limit      int      `json:"limit"`
-	Offset     int      `json:"offset"`
-	HasMore    bool     `json:"hasMore"`
-	EntityType string   `json:"entityType"`
+	Data       []common.Entity `json:"data"`
+	Total      int             `json:"total"`
+	Count      int             `json:"count"`
+	Limit      int             `json:"limit"`
+	Offset     int             `json:"offset"`
+	HasMore    bool            `json:"hasMore"`
+	EntityType string          `json:"entityType"`
 }

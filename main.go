@@ -71,8 +71,19 @@ func main() {
 			}
 		}()
 
-		// Get the engine from the persistence manager
-		engine = persistenceManager.Engine()
+		// Create the datastore engine with persistence
+		engine = datastore.NewDataStoreEngine(datastore.EngineConfig{
+			Persistence:       persistenceManager.GetPersistenceProvider(),
+			EnablePersistence: true,
+		})
+
+		// Set the engine in the persistence manager
+		persistenceManager.SetEngine(engine)
+
+		// Set up background garbage collection
+		if persistenceManager != nil {
+			go runGarbageCollection(persistenceManager, logger)
+		}
 
 		// Log successful initialization
 		logger.Infof("Persistent data store initialized at %s", *dataDir)
@@ -99,4 +110,24 @@ func main() {
 	}
 
 	logger.Fatal(server.Start())
+}
+
+// runGarbageCollection periodically runs Badger garbage collection
+func runGarbageCollection(manager *persistence.Manager, logger *logrus.Logger) {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		logger.Debug("Running Badger value log garbage collection")
+		err := manager.RunValueLogGC(0.7) // 0.7 is the discard ratio
+		if err == nil {
+			// If GC succeeded, run it again to collect more garbage
+			logger.Debug("Value log GC successful, running again")
+			// Add a small delay to give other processes a chance to run
+			time.Sleep(500 * time.Millisecond)
+			manager.RunValueLogGC(0.7)
+		} else if err != nil && err.Error() != "Nothing to discard" {
+			logger.Warnf("Error during value log GC: %v", err)
+		}
+	}
 }

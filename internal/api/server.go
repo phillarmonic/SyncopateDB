@@ -12,6 +12,7 @@ import (
 	"github.com/rs/cors"
 	"github.com/sirupsen/logrus"
 
+	"github.com/phillarmonic/syncopate-db/internal/common"
 	"github.com/phillarmonic/syncopate-db/internal/datastore"
 )
 
@@ -40,13 +41,13 @@ type Server struct {
 	router       *mux.Router
 	config       ServerConfig
 	server       *http.Server
-	engine       *datastore.Engine
+	engine       common.DatastoreEngine
 	queryService *datastore.QueryService
 	logger       *logrus.Logger
 }
 
 // NewServer creates a new REST API server
-func NewServer(engine *datastore.Engine, queryService *datastore.QueryService, config ServerConfig) *Server {
+func NewServer(engine common.DatastoreEngine, queryService *datastore.QueryService, config ServerConfig) *Server {
 	logger := logrus.New()
 	logger.SetLevel(config.LogLevel)
 	logger.SetFormatter(&logrus.JSONFormatter{})

@@ -5,13 +5,15 @@ import (
 	"encoding/binary"
 	"encoding/gob"
 	"fmt"
+	"io"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/dgraph-io/badger/v4"
 	"github.com/klauspost/compress/zstd"
-	"github.com/phillarmonic/syncopate-db/internal/datastore"
+	"github.com/phillarmonic/syncopate-db/internal/common"
 	"github.com/sirupsen/logrus"
 )
 
@@ -32,16 +34,19 @@ type WALEntry struct {
 	Data       []byte // Compressed serialized data
 }
 
-// PersistenceEngine implements disk persistence for the datastore
+// Engine implements disk persistence for the datastore
 type Engine struct {
-	db           *badger.DB
-	path         string
-	compressor   *zstd.Encoder
-	decompressor *zstd.Decoder
-	entityCache  *LRUCache
-	logger       *logrus.Logger
-	mu           sync.RWMutex
-	syncWAL      bool
+	db               *badger.DB
+	path             string
+	compressor       *zstd.Encoder
+	decompressor     *zstd.Decoder
+	entityCache      *LRUCache
+	logger           *logrus.Logger
+	mu               sync.RWMutex
+	syncWAL          bool
+	snapshotInterval time.Duration
+	stopSnapshot     chan struct{}
+	snapshotTicker   *time.Ticker
 }
 
 // Config holds configuration for the persistence engine
@@ -51,6 +56,9 @@ type Config struct {
 	SyncWrites       bool
 	SnapshotInterval time.Duration
 	Logger           *logrus.Logger
+	EncryptionKey    []byte
+	EnableAutoGC     bool
+	GCInterval       time.Duration
 }
 
 // DefaultConfig returns a default configuration
@@ -61,6 +69,8 @@ func DefaultConfig() Config {
 		SyncWrites:       true,
 		SnapshotInterval: 10 * time.Minute,
 		Logger:           logrus.New(),
+		EnableAutoGC:     true,
+		GCInterval:       5 * time.Minute,
 	}
 }
 
@@ -76,7 +86,15 @@ func NewPersistenceEngine(config Config) (*Engine, error) {
 		WithSyncWrites(config.SyncWrites).
 		WithLogger(config.Logger)
 
+	// Add encryption if key is provided
+	if len(config.EncryptionKey) > 0 {
+		badgerOpts = badgerOpts.
+			WithEncryptionKey(config.EncryptionKey)
+		// Note: WithIndexCache was removed in Badger v4
+	}
+
 	db, err := badger.Open(badgerOpts)
+
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
@@ -91,22 +109,25 @@ func NewPersistenceEngine(config Config) (*Engine, error) {
 	decompressor, err := zstd.NewReader(nil)
 	if err != nil {
 		db.Close()
+		compressor.Close()
 		return nil, fmt.Errorf("failed to create decompressor: %w", err)
 	}
 
 	engine := &Engine{
-		db:           db,
-		path:         config.Path,
-		compressor:   compressor,
-		decompressor: decompressor,
-		entityCache:  NewLRUCache(config.CacheSize),
-		logger:       config.Logger,
-		syncWAL:      config.SyncWrites,
+		db:               db,
+		path:             config.Path,
+		compressor:       compressor,
+		decompressor:     decompressor,
+		entityCache:      NewLRUCache(config.CacheSize),
+		logger:           config.Logger,
+		syncWAL:          config.SyncWrites,
+		snapshotInterval: config.SnapshotInterval,
+		stopSnapshot:     make(chan struct{}),
 	}
 
 	// Start snapshot routine
 	if config.SnapshotInterval > 0 {
-		go engine.snapshotRoutine(config.SnapshotInterval)
+		engine.startSnapshotRoutine()
 	}
 
 	return engine, nil
@@ -116,6 +137,12 @@ func NewPersistenceEngine(config Config) (*Engine, error) {
 func (pe *Engine) Close() error {
 	pe.mu.Lock()
 	defer pe.mu.Unlock()
+
+	// Stop the snapshot routine if running
+	if pe.snapshotTicker != nil {
+		pe.snapshotTicker.Stop()
+		close(pe.stopSnapshot)
+	}
 
 	pe.compressor.Close()
 	pe.decompressor.Close()
@@ -160,7 +187,7 @@ func (pe *Engine) WriteWALEntry(op int, entityType, entityID string, data []byte
 }
 
 // LoadWAL loads all WAL entries and applies them to the in-memory store
-func (pe *Engine) LoadWAL(store *datastore.Engine) error {
+func (pe *Engine) LoadWAL(store common.DatastoreEngine) error {
 	pe.mu.RLock()
 	defer pe.mu.RUnlock()
 
@@ -202,10 +229,10 @@ func (pe *Engine) LoadWAL(store *datastore.Engine) error {
 }
 
 // applyOperation applies a WAL operation to the datastore
-func (pe *Engine) applyOperation(store *datastore.Engine, op int, entityType, entityID string, data []byte) error {
+func (pe *Engine) applyOperation(store common.DatastoreEngine, op int, entityType, entityID string, data []byte) error {
 	switch op {
 	case OpRegisterEntityType:
-		var def datastore.EntityDefinition
+		var def common.EntityDefinition
 		if err := gob.NewDecoder(bytes.NewBuffer(data)).Decode(&def); err != nil {
 			return err
 		}
@@ -234,7 +261,7 @@ func (pe *Engine) applyOperation(store *datastore.Engine, op int, entityType, en
 }
 
 // TakeSnapshot creates a full snapshot of the current state
-func (pe *Engine) TakeSnapshot(store *datastore.Engine) error {
+func (pe *Engine) TakeSnapshot(store common.DatastoreEngine) error {
 	pe.mu.Lock()
 	defer pe.mu.Unlock()
 
@@ -299,7 +326,7 @@ func (pe *Engine) TakeSnapshot(store *datastore.Engine) error {
 }
 
 // LoadLatestSnapshot loads the most recent snapshot
-func (pe *Engine) LoadLatestSnapshot(store *datastore.Engine) error {
+func (pe *Engine) LoadLatestSnapshot(store common.DatastoreEngine) error {
 	pe.mu.RLock()
 	defer pe.mu.RUnlock()
 
@@ -356,7 +383,7 @@ func (pe *Engine) LoadLatestSnapshot(store *datastore.Engine) error {
 			}
 
 			for i := 0; i < typeCount; i++ {
-				var def datastore.EntityDefinition
+				var def common.EntityDefinition
 				if err := dec.Decode(&def); err != nil {
 					return fmt.Errorf("failed to decode entity definition: %w", err)
 				}
@@ -372,7 +399,7 @@ func (pe *Engine) LoadLatestSnapshot(store *datastore.Engine) error {
 				}
 
 				for j := 0; j < entityCount; j++ {
-					var entity datastore.Entity
+					var entity common.Entity
 					if err := dec.Decode(&entity); err != nil {
 						return fmt.Errorf("failed to decode entity: %w", err)
 					}
@@ -388,19 +415,26 @@ func (pe *Engine) LoadLatestSnapshot(store *datastore.Engine) error {
 	})
 }
 
-// snapshotRoutine periodically creates snapshots
-func (pe *Engine) snapshotRoutine(interval time.Duration) {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
-	for range ticker.C {
-		// We need a reference to the datastore to snapshot it
-		// This will need to be provided when we integrate this with the main engine
-	}
+// startSnapshotRoutine starts the periodic snapshot routine
+func (pe *Engine) startSnapshotRoutine() {
+	pe.snapshotTicker = time.NewTicker(pe.snapshotInterval)
+	go func() {
+		for {
+			select {
+			case <-pe.snapshotTicker.C:
+				// We need a reference to the datastore to snapshot it
+				// This will be provided when the snapshot is triggered from the Manager
+				pe.logger.Debug("Snapshot interval reached, waiting for snapshot to be triggered")
+			case <-pe.stopSnapshot:
+				pe.logger.Debug("Stopping snapshot routine")
+				return
+			}
+		}
+	}()
 }
 
 // RegisterEntityType registers a new entity type and persists the definition
-func (pe *Engine) RegisterEntityType(store *datastore.Engine, def datastore.EntityDefinition) error {
+func (pe *Engine) RegisterEntityType(store common.DatastoreEngine, def common.EntityDefinition) error {
 	// First register in memory
 	if err := store.RegisterEntityType(def); err != nil {
 		return err
@@ -416,7 +450,7 @@ func (pe *Engine) RegisterEntityType(store *datastore.Engine, def datastore.Enti
 }
 
 // Insert adds a new entity and persists it
-func (pe *Engine) Insert(store *datastore.Engine, entityType, entityID string, data map[string]interface{}) error {
+func (pe *Engine) Insert(store common.DatastoreEngine, entityType, entityID string, data map[string]interface{}) error {
 	// First insert in memory
 	if err := store.Insert(entityType, entityID, data); err != nil {
 		return err
@@ -432,7 +466,7 @@ func (pe *Engine) Insert(store *datastore.Engine, entityType, entityID string, d
 }
 
 // Update updates an entity and persists the changes
-func (pe *Engine) Update(store *datastore.Engine, entityID string, data map[string]interface{}) error {
+func (pe *Engine) Update(store common.DatastoreEngine, entityID string, data map[string]interface{}) error {
 	// Get the entity to determine its type
 	entity, err := store.Get(entityID)
 	if err != nil {
@@ -454,7 +488,7 @@ func (pe *Engine) Update(store *datastore.Engine, entityID string, data map[stri
 }
 
 // Delete removes an entity and persists the deletion
-func (pe *Engine) Delete(store *datastore.Engine, entityID string) error {
+func (pe *Engine) Delete(store common.DatastoreEngine, entityID string) error {
 	// Get the entity to determine its type
 	entity, err := store.Get(entityID)
 	if err != nil {
@@ -468,4 +502,128 @@ func (pe *Engine) Delete(store *datastore.Engine, entityID string) error {
 
 	// Write to WAL
 	return pe.WriteWALEntry(OpDeleteEntity, entity.Type, entityID, nil)
+}
+
+// RunValueLogGC runs garbage collection on the value log
+func (pe *Engine) RunValueLogGC(discardRatio float64) error {
+	return pe.db.RunValueLogGC(discardRatio)
+}
+
+// getDatabaseSize returns the approximate size of the database in bytes
+func (pe *Engine) getDatabaseSize() (int64, error) {
+	lsm, vlog := pe.db.Size()
+	// Return the combined size of LSM tree and value log
+	return lsm + vlog, nil
+}
+
+// getFileStats returns counts of LSM and value log files
+func (pe *Engine) getFileStats() (lsmFiles, valueLogFiles int, err error) {
+	// Implementation to count .sst and .vlog files in the database directory
+	lsmFiles = 0
+	valueLogFiles = 0
+
+	err = filepath.Walk(pe.path, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() {
+			ext := filepath.Ext(path)
+			if ext == ".sst" {
+				lsmFiles++
+			} else if ext == ".vlog" {
+				valueLogFiles++
+			}
+		}
+		return nil
+	})
+
+	return lsmFiles, valueLogFiles, err
+}
+
+// createBackup creates a backup of the database to the specified path
+func (pe *Engine) createBackup(path string) error {
+	f, err := os.Create(path)
+	if err != nil {
+		return fmt.Errorf("failed to create backup file: %w", err)
+	}
+	defer f.Close()
+
+	_, err = pe.db.Backup(f, 0)
+	if err != nil {
+		return fmt.Errorf("failed to backup database: %w", err)
+	}
+
+	return nil
+}
+
+// RestoreFromBackup restores the database from a backup file
+func (pe *Engine) RestoreFromBackup(store common.DatastoreEngine, backupPath string) error {
+	// Close the current database
+	if err := pe.Close(); err != nil {
+		return fmt.Errorf("failed to close database for restore: %w", err)
+	}
+
+	// Backup the existing data directory
+	backupDir := pe.path + ".bak." + time.Now().Format("20060102150405")
+	if err := os.Rename(pe.path, backupDir); err != nil {
+		return fmt.Errorf("failed to backup existing data directory: %w", err)
+	}
+
+	// Create a new empty directory
+	if err := os.MkdirAll(pe.path, 0755); err != nil {
+		return fmt.Errorf("failed to create data directory: %w", err)
+	}
+
+	// Open the backup file
+	f, err := os.Open(backupPath)
+	if err != nil {
+		return fmt.Errorf("failed to open backup file: %w", err)
+	}
+	defer f.Close()
+
+	// Create a new Badger database for the restore
+	opts := badger.DefaultOptions(pe.path)
+	db, err := badger.Open(opts)
+	if err != nil {
+		return fmt.Errorf("failed to open database for restore: %w", err)
+	}
+
+	// Load the backup
+	if err := db.Load(f, 16); err != nil {
+		db.Close()
+		return fmt.Errorf("failed to load backup: %w", err)
+	}
+
+	// Close the temporary database
+	if err := db.Close(); err != nil {
+		return fmt.Errorf("failed to close database after restore: %w", err)
+	}
+
+	// Reopen the engine with the restored data
+	pe.db, err = badger.Open(badger.DefaultOptions(pe.path))
+	if err != nil {
+		return fmt.Errorf("failed to reopen database after restore: %w", err)
+	}
+
+	// Load the restored data into the store
+	if err := pe.LoadLatestSnapshot(store); err != nil {
+		return fmt.Errorf("failed to load snapshot after restore: %w", err)
+	}
+
+	if err := pe.LoadWAL(store); err != nil {
+		return fmt.Errorf("failed to load WAL after restore: %w", err)
+	}
+
+	return nil
+}
+
+// StreamBackup streams a backup of the database to the provided writer
+func (pe *Engine) StreamBackup(w io.Writer) error {
+	_, err := pe.db.Backup(w, 0)
+	return err
+}
+
+// GetPersistenceProvider returns the persistence provider
+func (m *Manager) GetPersistenceProvider() common.PersistenceProvider {
+	return m.persistence
 }

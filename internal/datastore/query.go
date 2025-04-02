@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/phillarmonic/syncopate-db/internal/common"
 )
 
 // QueryService handles the querying logic for the data store
@@ -21,7 +23,7 @@ func NewQueryService(engine *Engine) *QueryService {
 }
 
 // Query executes a query against the data store
-func (qs *QueryService) Query(options QueryOptions) ([]Entity, error) {
+func (qs *QueryService) Query(options QueryOptions) ([]common.Entity, error) {
 	qs.engine.mu.RLock()
 	defer qs.engine.mu.RUnlock()
 
@@ -128,7 +130,7 @@ func (qs *QueryService) Query(options QueryOptions) ([]Entity, error) {
 	// Sort results if needed
 	if options.OrderBy != "" {
 		// Create a slice of entities for sorting
-		entitiesToSort := make([]Entity, 0, len(entityIDs))
+		entitiesToSort := make([]common.Entity, 0, len(entityIDs))
 		for _, id := range entityIDs {
 			entitiesToSort = append(entitiesToSort, qs.engine.entities[id])
 		}
@@ -145,7 +147,7 @@ func (qs *QueryService) Query(options QueryOptions) ([]Entity, error) {
 
 	// Apply offset and limit
 	if options.Offset >= len(entityIDs) {
-		return []Entity{}, nil
+		return []common.Entity{}, nil
 	}
 
 	end := len(entityIDs)
@@ -156,7 +158,7 @@ func (qs *QueryService) Query(options QueryOptions) ([]Entity, error) {
 	entityIDs = entityIDs[options.Offset:end]
 
 	// Collect the final set of entities
-	results := make([]Entity, len(entityIDs))
+	results := make([]common.Entity, len(entityIDs))
 	for i, id := range entityIDs {
 		results[i] = qs.engine.entities[id]
 	}
@@ -444,7 +446,7 @@ func (qs *QueryService) compareValues(left interface{}, operator string, right i
 }
 
 // sortEntities sorts a slice of entities by the specified field
-func (qs *QueryService) sortEntities(entities []Entity, field string, descending bool) {
+func (qs *QueryService) sortEntities(entities []common.Entity, field string, descending bool) {
 	sort.Slice(entities, func(i, j int) bool {
 		valI, existsI := entities[i].Fields[field]
 		valJ, existsJ := entities[j].Fields[field]

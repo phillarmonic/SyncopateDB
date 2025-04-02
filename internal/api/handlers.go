@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/phillarmonic/syncopate-db/internal/common"
 	"github.com/phillarmonic/syncopate-db/internal/datastore"
 )
 
@@ -49,7 +50,7 @@ func (s *Server) handleGetEntityTypes(w http.ResponseWriter, r *http.Request) {
 
 // handleCreateEntityType creates a new entity type
 func (s *Server) handleCreateEntityType(w http.ResponseWriter, r *http.Request) {
-	var def datastore.EntityDefinition
+	var def common.EntityDefinition
 	if err := json.NewDecoder(r.Body).Decode(&def); err != nil {
 		s.respondWithError(w, http.StatusBadRequest, "Invalid request payload")
 		return
