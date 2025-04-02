@@ -248,6 +248,24 @@ func (pe *Engine) applyOperation(store common.DatastoreEngine, op int, entityTyp
 		if err := gob.NewDecoder(bytes.NewBuffer(data)).Decode(&def); err != nil {
 			return err
 		}
+
+		// Check if the entity type already exists before trying to register it
+		existingDef, err := store.GetEntityDefinition(def.Name)
+		if err == nil {
+			// Entity type already exists, compare the definitions
+			if compareEntityDefinitions(existingDef, def) {
+				// Definitions are identical, skip registration
+				pe.logger.Debugf("Entity type %s already exists during WAL replay with identical definition, skipping registration", def.Name)
+				return nil
+			} else {
+				// Definitions are different, log a warning with details
+				pe.logger.Warnf("Entity type %s already exists during WAL replay with DIFFERENT definition. This may indicate a schema change that wasn't properly migrated.", def.Name)
+				pe.logger.Warnf("Existing fields: %v, New fields: %v", existingDef.Fields, def.Fields)
+				// Continue with existing definition - don't try to re-register
+				return nil
+			}
+		}
+
 		return store.RegisterEntityType(def)
 
 	case OpInsertEntity:
@@ -623,4 +641,41 @@ func (pe *Engine) StreamBackup(w io.Writer) error {
 // GetPersistenceProvider returns the persistence provider for the Manager
 func (pe *Engine) GetPersistenceProvider() common.PersistenceProvider {
 	return pe
+}
+
+// compareEntityDefinitions checks if two entity definitions are identical
+func compareEntityDefinitions(def1, def2 common.EntityDefinition) bool {
+	// Check if names match
+	if def1.Name != def2.Name {
+		return false
+	}
+
+	// Check if they have the same number of fields
+	if len(def1.Fields) != len(def2.Fields) {
+		return false
+	}
+
+	// Create a map of fields from def1 for easy lookup
+	fields1 := make(map[string]common.FieldDefinition)
+	for _, field := range def1.Fields {
+		fields1[field.Name] = field
+	}
+
+	// Compare each field in def2 with def1
+	for _, field2 := range def2.Fields {
+		field1, exists := fields1[field2.Name]
+		if !exists {
+			// Field exists in def2 but not in def1
+			return false
+		}
+
+		// Compare field properties
+		if field1.Type != field2.Type ||
+			field1.Indexed != field2.Indexed ||
+			field1.Required != field2.Required {
+			return false
+		}
+	}
+
+	return true
 }
