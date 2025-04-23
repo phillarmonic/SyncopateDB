@@ -106,6 +106,11 @@ func (dse *Engine) RegisterEntityType(def common.EntityDefinition) error {
 		return fmt.Errorf("entity type %s already exists", def.Name)
 	}
 
+	// Set default ID generator if not specified (auto_increment)
+	if def.IDGenerator == "" {
+		def.IDGenerator = common.IDTypeAutoIncrement
+	}
+
 	// Now acquire write lock for modification
 	dse.mu.Lock()
 
@@ -304,7 +309,7 @@ func (dse *Engine) Insert(entityType string, id string, data map[string]interfac
 
 // Update updates an existing entity in the data store engine
 func (dse *Engine) Update(id string, data map[string]interface{}) error {
-	// First read the current state without write lock
+	// First, read the current state without write lock
 	dse.mu.RLock()
 	entity, exists := dse.entities[id]
 	if !exists {
@@ -312,8 +317,8 @@ func (dse *Engine) Update(id string, data map[string]interface{}) error {
 		return fmt.Errorf("entity with ID %s not found", id)
 	}
 
-	// Validate the update data
-	if err := dse.validateEntityData(entity.Type, data); err != nil {
+	// Validate the update data using the new function
+	if err := dse.validateUpdateData(entity.Type, data); err != nil {
 		dse.mu.RUnlock()
 		return err
 	}

@@ -58,12 +58,23 @@ func (s *Server) handleCreateEntityType(w http.ResponseWriter, r *http.Request) 
 	}
 	defer r.Body.Close()
 
+	// Note: If IDGenerator is empty string, auto_increment will be used as default
 	if err := s.engine.RegisterEntityType(def); err != nil {
 		s.respondWithError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	s.respondWithJSON(w, http.StatusCreated, map[string]string{"message": "Entity type created successfully"})
+	// Get the actual definition with any defaults applied
+	updatedDef, err := s.engine.GetEntityDefinition(def.Name)
+	if err != nil {
+		s.respondWithError(w, http.StatusInternalServerError, "Entity type created but could not retrieve it")
+		return
+	}
+
+	s.respondWithJSON(w, http.StatusCreated, map[string]interface{}{
+		"message":    "Entity type created successfully",
+		"entityType": updatedDef,
+	})
 }
 
 // handleGetEntityType retrieves a specific entity type

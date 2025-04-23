@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/phillarmonic/syncopate-db/internal/common"
 	"reflect"
 	"time"
 )
@@ -24,6 +25,14 @@ func (dse *Engine) validateEntityData(entityType string, data map[string]interfa
 		}
 
 		if exists {
+			// Check for null value
+			if value == nil {
+				if !fieldDef.Nullable {
+					return fmt.Errorf("field %s cannot be null", fieldDef.Name)
+				}
+				continue // Skip type validation for null values
+			}
+
 			if err := validateFieldType(fieldDef.Type, value); err != nil {
 				return fmt.Errorf("field %s: %w", fieldDef.Name, err)
 			}
@@ -36,7 +45,7 @@ func (dse *Engine) validateEntityData(entityType string, data map[string]interfa
 // validateFieldType validates that a value matches the expected type
 func validateFieldType(fieldType string, value interface{}) error {
 	if value == nil {
-		return nil // Allowing nil values for all types
+		return nil // Allowing nil values if the field is nullable
 	}
 
 	switch fieldType {
@@ -102,6 +111,45 @@ func validateFieldType(fieldType string, value interface{}) error {
 		}
 	default:
 		return fmt.Errorf("unsupported field type: %s", fieldType)
+	}
+
+	return nil
+}
+
+// On update of entity data, validate the data against the defined schema.
+func (dse *Engine) validateUpdateData(entityType string, data map[string]interface{}) error {
+	def, exists := dse.definitions[entityType]
+	if !exists {
+		return fmt.Errorf("entity type %s not registered", entityType)
+	}
+
+	// Only validate types of fields being updated
+	for fieldName, value := range data {
+		// Find field definition
+		var fieldDef *common.FieldDefinition
+		for i := range def.Fields {
+			if def.Fields[i].Name == fieldName {
+				fieldDef = &def.Fields[i]
+				break
+			}
+		}
+
+		if fieldDef == nil {
+			return fmt.Errorf("field %s does not exist in entity type %s", fieldName, entityType)
+		}
+
+		// Check for null value
+		if value == nil {
+			if !fieldDef.Nullable {
+				return fmt.Errorf("field %s cannot be null", fieldName)
+			}
+			continue // Skip type validation for null values
+		}
+
+		// Validate field type
+		if err := validateFieldType(fieldDef.Type, value); err != nil {
+			return fmt.Errorf("field %s: %w", fieldName, err)
+		}
 	}
 
 	return nil

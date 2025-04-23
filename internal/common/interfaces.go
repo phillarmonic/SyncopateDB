@@ -61,6 +61,7 @@ type FieldDefinition struct {
 	Type     string `json:"type"`
 	Indexed  bool   `json:"indexed"`
 	Required bool   `json:"required"`
+	Nullable bool   `json:"nullable,omitempty"`
 }
 
 // EntityDefinition defines an entity's structure with fields
