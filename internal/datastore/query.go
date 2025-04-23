@@ -542,6 +542,13 @@ func (qs *QueryService) sortEntities(entities []common.Entity, field string, des
 
 // ExecutePaginatedQuery executes a query and returns a paginated response
 func (qs *QueryService) ExecutePaginatedQuery(options QueryOptions) (*PaginatedResponse, error) {
+	// Set the default sort (internal) field if none is specified
+	if options.OrderBy == "" {
+		options.OrderBy = "_created_at"
+		// Default to ascending order (oldest first)
+		options.OrderDesc = false
+	}
+
 	results, err := qs.Query(options)
 	if err != nil {
 		return nil, err
@@ -561,4 +568,38 @@ func (qs *QueryService) ExecutePaginatedQuery(options QueryOptions) (*PaginatedR
 		HasMore:    options.Offset+len(results) < total,
 		EntityType: options.EntityType,
 	}, nil
+}
+
+// filterInternalFields removes internal fields from entity data
+func (qs *QueryService) filterInternalFields(entity common.Entity) common.Entity {
+	// Get the entity definition
+	def, err := qs.engine.GetEntityDefinition(entity.Type)
+	if err != nil {
+		// If we can't get the definition, return the entity as is
+		return entity
+	}
+
+	// Create a map of internal field names for quick lookup
+	internalFields := make(map[string]bool)
+	for _, field := range def.Fields {
+		if field.Internal {
+			internalFields[field.Name] = true
+		}
+	}
+
+	// Create a filtered copy of the entity
+	filteredEntity := common.Entity{
+		ID:     entity.ID,
+		Type:   entity.Type,
+		Fields: make(map[string]interface{}),
+	}
+
+	// Copy only non-internal fields
+	for name, value := range entity.Fields {
+		if !internalFields[name] {
+			filteredEntity.Fields[name] = value
+		}
+	}
+
+	return filteredEntity
 }

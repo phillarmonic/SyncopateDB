@@ -106,6 +106,9 @@ func (dse *Engine) RegisterEntityType(def common.EntityDefinition) error {
 		return fmt.Errorf("entity type %s already exists", def.Name)
 	}
 
+	// Add internal fields to the definition
+	dse.addInternalFieldDefinitions(&def)
+
 	// Set default ID generator if not specified (auto_increment)
 	if def.IDGenerator == "" {
 		def.IDGenerator = common.IDTypeAutoIncrement
@@ -240,6 +243,9 @@ func (dse *Engine) Insert(entityType string, id string, data map[string]interfac
 		}
 	}
 
+	// Add internal fields
+	dse.addInternalFields(entityType, data)
+
 	// Now validate the data and prepare for insertion
 	dse.mu.RLock()
 	entity, err := dse.prepareEntityForInsert(entityType, id, data)
@@ -316,6 +322,12 @@ func (dse *Engine) Update(id string, data map[string]interface{}) error {
 		dse.mu.RUnlock()
 		return fmt.Errorf("entity with ID %s not found", id)
 	}
+
+	// Update internal fields
+	data["_updated_at"] = time.Now()
+
+	// Ensure _created_at is not modified
+	delete(data, "_created_at")
 
 	// Validate the update data using the new function
 	if err := dse.validateUpdateData(entity.Type, data); err != nil {
@@ -565,4 +577,38 @@ func (dse *Engine) ForceGarbageCollection(discardRatio float64) error {
 	// This requires a type assertion which might break the abstraction
 	// You might want to add a RunGarbageCollection method to the common.PersistenceProvider interface
 	return fmt.Errorf("garbage collection not supported through the interface")
+}
+
+// addInternalFields adds necessary internal fields to the entity data
+func (dse *Engine) addInternalFields(entityType string, data map[string]interface{}) {
+	// Add created_at timestamp if not already present
+	if _, exists := data["_created_at"]; !exists {
+		data["_created_at"] = time.Now()
+	}
+
+	// Add updated_at timestamp
+	data["_updated_at"] = time.Now()
+}
+
+// addInternalFieldDefinitions adds internal field definitions to an entity type
+func (dse *Engine) addInternalFieldDefinitions(def *common.EntityDefinition) {
+	// Add _created_at field
+	createdAtField := common.FieldDefinition{
+		Name:     "_created_at",
+		Type:     "datetime",
+		Indexed:  true, // Index for efficient sorting
+		Required: true,
+		Internal: true, // Mark as internal
+	}
+
+	// Add _updated_at field
+	updatedAtField := common.FieldDefinition{
+		Name:     "_updated_at",
+		Type:     "datetime",
+		Indexed:  true, // Index for efficient filtering
+		Required: true,
+		Internal: true, // Mark as internal
+	}
+
+	def.Fields = append(def.Fields, createdAtField, updatedAtField)
 }

@@ -3,8 +3,10 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"os"
 	"reflect"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -115,6 +117,13 @@ func (s *Server) handleListEntities(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Filter internal fields from response data
+	filteredData := make([]common.Entity, len(response.Data))
+	for i, entity := range response.Data {
+		filteredData[i] = s.filterInternalFields(entity)
+	}
+	response.Data = filteredData
+
 	s.respondWithJSON(w, http.StatusOK, response)
 }
 
@@ -196,7 +205,9 @@ func (s *Server) handleGetEntity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.respondWithJSON(w, http.StatusOK, entity)
+	// Filter out internal fields before sending response
+	filteredEntity := s.filterInternalFields(entity)
+	s.respondWithJSON(w, http.StatusOK, filteredEntity)
 }
 
 // handleUpdateEntity updates a specific entity
@@ -256,6 +267,13 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Filter internal fields from response data
+	filteredData := make([]common.Entity, len(response.Data))
+	for i, entity := range response.Data {
+		filteredData[i] = s.filterInternalFields(entity)
+	}
+	response.Data = filteredData
+
 	s.respondWithJSON(w, http.StatusOK, response)
 }
 
@@ -287,4 +305,31 @@ func (s *Server) parseQueryParams(r *http.Request) (limit int, offset int, order
 	orderDesc = r.URL.Query().Get("orderDesc") == "true"
 
 	return
+}
+
+// filterInternalFields removes internal fields from entity data based on debug settings
+func (s *Server) filterInternalFields(entity common.Entity) common.Entity {
+	// Check if debug mode is enabled via environment variable
+	debugMode := os.Getenv("SYNCOPATE_DEBUG") == "true"
+
+	// If debug mode is enabled, return the full entity with internal fields
+	if debugMode {
+		return entity
+	}
+
+	// Create a filtered copy of the entity
+	filteredEntity := common.Entity{
+		ID:     entity.ID,
+		Type:   entity.Type,
+		Fields: make(map[string]interface{}),
+	}
+
+	// Copy only non-internal fields (those not starting with underscore)
+	for name, value := range entity.Fields {
+		if !strings.HasPrefix(name, "_") {
+			filteredEntity.Fields[name] = value
+		}
+	}
+
+	return filteredEntity
 }
