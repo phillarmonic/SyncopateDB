@@ -13,11 +13,12 @@ import (
 // Engine provides the core functionality for storing and retrieving data
 // and implements the common.DatastoreEngine interface
 type Engine struct {
-	definitions map[string]common.EntityDefinition
-	entities    map[string]common.Entity
-	indices     map[string]map[string]map[string][]string
-	persistence common.PersistenceProvider
-	mu          sync.RWMutex
+	definitions    map[string]common.EntityDefinition
+	entities       map[string]common.Entity
+	indices        map[string]map[string]map[string][]string
+	persistence    common.PersistenceProvider
+	idGeneratorMgr *IDGeneratorManager
+	mu             sync.RWMutex
 }
 
 // EngineConfig holds configuration for the data store engine
@@ -29,9 +30,10 @@ type EngineConfig struct {
 // NewDataStoreEngine creates a new data store engine instance
 func NewDataStoreEngine(config ...EngineConfig) *Engine {
 	engine := &Engine{
-		definitions: make(map[string]common.EntityDefinition),
-		entities:    make(map[string]common.Entity),
-		indices:     make(map[string]map[string]map[string][]string),
+		definitions:    make(map[string]common.EntityDefinition),
+		entities:       make(map[string]common.Entity),
+		indices:        make(map[string]map[string]map[string][]string),
+		idGeneratorMgr: NewIDGeneratorManager(),
 	}
 
 	// Apply configuration if provided
@@ -50,6 +52,14 @@ func NewDataStoreEngine(config ...EngineConfig) *Engine {
 			if err := engine.persistence.LoadWAL(engine); err != nil {
 				// Log error but continue
 				fmt.Printf("Error loading WAL: %v\n", err)
+			}
+
+			// Load auto-increment counters (new addition)
+			if persistenceWithCounters, ok := engine.persistence.(common.PersistenceWithCounters); ok {
+				if err := persistenceWithCounters.LoadCounters(engine); err != nil {
+					// Log error but continue
+					fmt.Printf("Error loading auto-increment counters: %v\n", err)
+				}
 			}
 		}
 	}
@@ -104,6 +114,9 @@ func (dse *Engine) RegisterEntityType(def common.EntityDefinition) error {
 		dse.mu.Unlock()
 		return fmt.Errorf("entity type %s already exists", def.Name)
 	}
+
+	// Register the ID generator type for this entity
+	dse.idGeneratorMgr.RegisterEntityType(def.Name, def.IDGenerator)
 
 	// Update in-memory state
 	dse.definitions[def.Name] = def
@@ -190,9 +203,39 @@ func (dse *Engine) prepareEntityForInsert(entityType string, id string, data map
 	}, nil
 }
 
-// Insert adds a new entity to the data store engine
+// Insert adds a new entity to the data store engine with support for ID generation
 func (dse *Engine) Insert(entityType string, id string, data map[string]interface{}) error {
-	// First, validate without taking a write lock
+	// Check if entity type exists
+	dse.mu.RLock()
+	_, exists := dse.definitions[entityType]
+	dse.mu.RUnlock()
+
+	if !exists {
+		return fmt.Errorf("entity type %s not registered", entityType)
+	}
+
+	// Handle ID generation if needed
+	var generatedID bool
+	if id == "" {
+		// Generate ID based on entity type's strategy
+		var err error
+		id, err = dse.idGeneratorMgr.GenerateID(entityType)
+		if err != nil {
+			return fmt.Errorf("failed to generate ID: %w", err)
+		}
+		generatedID = true
+	} else {
+		// Validate provided ID against expected format
+		valid, err := dse.idGeneratorMgr.ValidateID(entityType, id)
+		if err != nil {
+			return fmt.Errorf("failed to validate ID: %w", err)
+		}
+		if !valid {
+			return fmt.Errorf("invalid ID format for entity type %s", entityType)
+		}
+	}
+
+	// Now validate the data and prepare for insertion
 	dse.mu.RLock()
 	entity, err := dse.prepareEntityForInsert(entityType, id, data)
 	dse.mu.RUnlock()
@@ -201,7 +244,7 @@ func (dse *Engine) Insert(entityType string, id string, data map[string]interfac
 		return err
 	}
 
-	// Now take write lock and check again to handle race conditions
+	// Now acquire write lock and check again to handle race conditions
 	dse.mu.Lock()
 
 	// Check again if entity type exists and ID is unique under write lock
@@ -212,6 +255,10 @@ func (dse *Engine) Insert(entityType string, id string, data map[string]interfac
 
 	if _, exists := dse.entities[id]; exists {
 		dse.mu.Unlock()
+		if generatedID {
+			// If we generated the ID and there's still a collision, something is wrong with our ID generator
+			return fmt.Errorf("generated ID %s already exists, this should not happen", id)
+		}
 		return fmt.Errorf("entity with ID %s already exists", id)
 	}
 
@@ -237,8 +284,21 @@ func (dse *Engine) Insert(entityType string, id string, data map[string]interfac
 
 			return fmt.Errorf("failed to persist entity: %w", err)
 		}
-	}
 
+		// Save auto-increment counter if this is an auto-increment entity type
+		if persistenceWithCounters, ok := persistenceProvider.(common.PersistenceWithCounters); ok {
+			def, _ := dse.GetEntityDefinition(entityType)
+			if def.IDGenerator == common.IDTypeAutoIncrement {
+				counter, err := dse.GetAutoIncrementCounter(entityType)
+				if err == nil {
+					if err := persistenceWithCounters.SaveCounter(entityType, counter); err != nil {
+						// Just log the error, don't fail the insert
+						fmt.Printf("Error saving auto-increment counter: %v\n", err)
+					}
+				}
+			}
+		}
+	}
 	return nil
 }
 

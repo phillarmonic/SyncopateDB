@@ -1,5 +1,7 @@
 package common
 
+import "errors"
+
 // PersistenceProvider defines the interface for storage backends
 type PersistenceProvider interface {
 	// Core persistence operations
@@ -17,6 +19,16 @@ type PersistenceProvider interface {
 	Close() error
 }
 
+// PersistenceWithCounters extends PersistenceProvider with counter operations
+// for auto-increment ID generators
+type PersistenceWithCounters interface {
+	PersistenceProvider
+
+	// Counter operations
+	LoadCounters(store DatastoreEngine) error
+	SaveCounter(entityType string, counter uint64) error
+}
+
 // DatastoreEngine defines the interface for the datastore engine
 // This allows the persistence layer to interact with the datastore
 // without creating a circular dependency
@@ -30,6 +42,10 @@ type DatastoreEngine interface {
 	Get(id string) (Entity, error)
 	GetEntityCount(entityType string) (int, error)
 	GetAllEntitiesOfType(entityType string) ([]Entity, error)
+
+	// New methods for ID generation
+	SetAutoIncrementCounter(entityType string, counter uint64) error
+	GetAutoIncrementCounter(entityType string) (uint64, error)
 }
 
 // Entity represents a concrete instance with data
@@ -49,6 +65,36 @@ type FieldDefinition struct {
 
 // EntityDefinition defines an entity's structure with fields
 type EntityDefinition struct {
-	Name   string            `json:"name"`
-	Fields []FieldDefinition `json:"fields"`
+	Name        string            `json:"name"`
+	Fields      []FieldDefinition `json:"fields"`
+	IDGenerator IDGenerationType  `json:"idGenerator"`
 }
+
+// IDGenerationType defines the type of ID generation strategy
+type IDGenerationType string
+
+// ID generation types
+const (
+	IDTypeAutoIncrement IDGenerationType = "auto_increment"
+	IDTypeUUID          IDGenerationType = "uuid"
+	IDTypeCUID          IDGenerationType = "cuid"
+	IDTypeCustom        IDGenerationType = "custom" // Client provides the ID
+)
+
+// IDGenerator defines the interface for ID generation
+type IDGenerator interface {
+	// GenerateID generates a new unique ID for an entity type
+	GenerateID(entityType string) (string, error)
+
+	// ValidateID validates if an ID is valid for this generator
+	ValidateID(id string) bool
+
+	// Type returns the type of ID generator
+	Type() IDGenerationType
+}
+
+// ErrInvalidID is returned when an ID doesn't match the expected format
+var ErrInvalidID = errors.New("invalid ID format")
+
+// ErrIDGenerationFailed is returned when ID generation fails
+var ErrIDGenerationFailed = errors.New("failed to generate ID")

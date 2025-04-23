@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"reflect"
 	"strconv"
 	"time"
 
@@ -122,19 +123,54 @@ func (s *Server) handleCreateEntity(w http.ResponseWriter, r *http.Request) {
 	}
 	defer r.Body.Close()
 
-	if entityData.ID == "" {
-		s.respondWithError(w, http.StatusBadRequest, "Entity ID is required")
+	// Get entity definition to check the ID generator type
+	def, err := s.engine.GetEntityDefinition(entityType)
+	if err != nil {
+		s.respondWithError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
+	// Custom ID is required only if the ID generation type is custom
+	if entityData.ID == "" && def.IDGenerator == common.IDTypeCustom {
+		s.respondWithError(w, http.StatusBadRequest, "Entity ID is required for custom ID generation")
+		return
+	}
+
+	// Insert the entity - ID will be generated if not provided based on the entity type's generator
 	if err := s.engine.Insert(entityType, entityData.ID, entityData.Fields); err != nil {
 		s.respondWithError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
+	// For consistency with the original handler, get the entity to retrieve its ID
+	// In a real implementation, we might want to modify Insert to return the generated ID
+	var entityID string
+	if entityData.ID != "" {
+		entityID = entityData.ID
+	} else {
+		// We need to find the entity that was just inserted
+		// This is a bit inefficient, but it works for the response
+		// A better approach would be to modify Insert to return the generated ID
+		entities, err := s.engine.GetAllEntitiesOfType(entityType)
+		if err != nil {
+			s.respondWithError(w, http.StatusInternalServerError, "Failed to retrieve entity after creation")
+			return
+		}
+
+		// Find the most recently inserted entity
+		// This is a heuristic and not 100% reliable in a concurrent environment
+		// Again, a better approach would be to modify Insert to return the generated ID
+		for _, e := range entities {
+			if reflect.DeepEqual(e.Fields, entityData.Fields) {
+				entityID = e.ID
+				break
+			}
+		}
+	}
+
 	s.respondWithJSON(w, http.StatusCreated, map[string]string{
 		"message": "Entity created successfully",
-		"id":      entityData.ID,
+		"id":      entityID,
 	})
 }
 

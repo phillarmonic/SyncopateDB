@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -686,4 +687,54 @@ func compareEntityDefinitions(def1, def2 common.EntityDefinition) bool {
 	}
 
 	return true
+}
+
+// LoadCounters loads auto-increment counters from the database
+func (pe *Engine) LoadCounters(store common.DatastoreEngine) error {
+	// This method should be called after loading the snapshot and WAL
+	// to ensure auto-increment counters are initialized correctly
+
+	return pe.db.View(func(txn *badger.Txn) error {
+		opts := badger.DefaultIteratorOptions
+		opts.Prefix = []byte("counter:")
+
+		it := txn.NewIterator(opts)
+		defer it.Close()
+
+		for it.Rewind(); it.Valid(); it.Next() {
+			item := it.Item()
+			key := string(item.Key())
+			parts := strings.SplitN(key, ":", 2)
+			if len(parts) != 2 {
+				continue
+			}
+
+			entityType := parts[1]
+
+			err := item.Value(func(val []byte) error {
+				counter := binary.LittleEndian.Uint64(val)
+
+				// Call a method on the store to set the counter value
+				// We need to add this method to our datastore engine
+				return store.SetAutoIncrementCounter(entityType, counter)
+			})
+
+			if err != nil {
+				return err
+			}
+		}
+
+		return nil
+	})
+}
+
+// SaveCounter saves an auto-increment counter to the database
+func (pe *Engine) SaveCounter(entityType string, counter uint64) error {
+	key := fmt.Sprintf("counter:%s", entityType)
+	value := make([]byte, 8)
+	binary.LittleEndian.PutUint64(value, counter)
+
+	return pe.db.Update(func(txn *badger.Txn) error {
+		return txn.Set([]byte(key), value)
+	})
 }
