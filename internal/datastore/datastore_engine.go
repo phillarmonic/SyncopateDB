@@ -192,7 +192,7 @@ func (dse *Engine) prepareEntityForInsert(entityType string, id string, data map
 
 // Insert adds a new entity to the data store engine
 func (dse *Engine) Insert(entityType string, id string, data map[string]interface{}) error {
-	// First validate without taking a write lock
+	// First, validate without taking a write lock
 	dse.mu.RLock()
 	entity, err := dse.prepareEntityForInsert(entityType, id, data)
 	dse.mu.RUnlock()

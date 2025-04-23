@@ -61,6 +61,14 @@ type Config struct {
 	GCInterval       time.Duration
 }
 
+func init() {
+	// Register types for gob encoding/decoding
+	gob.Register([]interface{}{})
+	gob.Register(map[string]interface{}{})
+	gob.Register(map[interface{}]interface{}{})
+	gob.Register(time.Time{})
+}
+
 // DefaultConfig returns a default configuration
 func DefaultConfig() Config {
 	return Config{
