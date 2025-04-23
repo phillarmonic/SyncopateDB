@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/phillarmonic/syncopate-db/internal/common"
 	"reflect"
+	"strings"
 	"time"
 )
 
@@ -14,6 +15,23 @@ func (dse *Engine) validateEntityData(entityType string, data map[string]interfa
 	def, exists := dse.definitions[entityType]
 	if !exists {
 		return fmt.Errorf("entity type %s not registered", entityType)
+	}
+
+	// Check for fields that start with underscore (reserved for internal use)
+	for fieldName := range data {
+		// Skip validation for internal fields that are added by the system
+		// We can identify these by checking if they're in the entity definition with Internal=true
+		isInternalField := false
+		for _, fieldDef := range def.Fields {
+			if fieldDef.Name == fieldName && fieldDef.Internal {
+				isInternalField = true
+				break
+			}
+		}
+
+		if !isInternalField && strings.HasPrefix(fieldName, "_") {
+			return fmt.Errorf("field name '%s' is not allowed: names starting with underscore are reserved for internal use", fieldName)
+		}
 	}
 
 	// Check for required fields and type validation
@@ -123,6 +141,23 @@ func (dse *Engine) validateUpdateData(entityType string, data map[string]interfa
 		return fmt.Errorf("entity type %s not registered", entityType)
 	}
 
+	// Check for fields that start with underscore (reserved for internal use)
+	for fieldName := range data {
+		// Skip validation for internal fields that are added by the system
+		// We can identify these by checking if they're in the entity definition with Internal=true
+		isInternalField := false
+		for _, fieldDef := range def.Fields {
+			if fieldDef.Name == fieldName && fieldDef.Internal {
+				isInternalField = true
+				break
+			}
+		}
+
+		if !isInternalField && strings.HasPrefix(fieldName, "_") {
+			return fmt.Errorf("field name '%s' is not allowed: names starting with underscore are reserved for internal use", fieldName)
+		}
+	}
+
 	// Only validate types of fields being updated
 	for fieldName, value := range data {
 		// Find field definition
@@ -152,5 +187,26 @@ func (dse *Engine) validateUpdateData(entityType string, data map[string]interfa
 		}
 	}
 
+	return nil
+}
+
+// ValidateEntityTypeFields validates field definitions in an entity type
+// to ensure no field name starts with an underscore (reserved for internal use)
+// The skipInternal parameter allows internal fields to bypass this validation
+func ValidateEntityTypeFields(fields []common.FieldDefinition, skipInternal bool) error {
+	for _, field := range fields {
+		// Skip validation for fields already marked as internal
+		if field.Internal {
+			continue
+		}
+
+		// If a field starts with underscore, mark it as internal and skip validation
+		if strings.HasPrefix(field.Name, "_") {
+			if skipInternal {
+				continue
+			}
+			return fmt.Errorf("field name '%s' is not allowed: names starting with underscore are reserved for internal use", field.Name)
+		}
+	}
 	return nil
 }

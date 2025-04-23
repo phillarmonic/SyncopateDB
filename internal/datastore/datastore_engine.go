@@ -106,6 +106,12 @@ func (dse *Engine) RegisterEntityType(def common.EntityDefinition) error {
 		return fmt.Errorf("entity type %s already exists", def.Name)
 	}
 
+	// Validate that no field names start with underscore (reserved for internal use)
+	// Pass false to validate all fields, since we haven't added our internal fields yet
+	if err := ValidateEntityTypeFields(def.Fields, true); err != nil {
+		return err
+	}
+
 	// Add internal fields to the definition
 	dse.addInternalFieldDefinitions(&def)
 

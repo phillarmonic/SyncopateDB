@@ -275,8 +275,15 @@ func (pe *Engine) applyOperation(store common.DatastoreEngine, op int, entityTyp
 			}
 		}
 
-		return store.RegisterEntityType(def)
+		// When loading from persistence, we need to make sure internal fields
+		// are properly marked before validation
+		for i := range def.Fields {
+			if strings.HasPrefix(def.Fields[i].Name, "_") {
+				def.Fields[i].Internal = true
+			}
+		}
 
+		return store.RegisterEntityType(def)
 	case OpInsertEntity:
 		var fields map[string]interface{}
 		if err := gob.NewDecoder(bytes.NewBuffer(data)).Decode(&fields); err != nil {
