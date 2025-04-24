@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -14,7 +15,7 @@ import (
 // and implements the common.DatastoreEngine interface
 type Engine struct {
 	definitions    map[string]common.EntityDefinition
-	entities       map[string]common.Entity
+	entities       map[string]common.Entity // Key format: "entityType:entityID"
 	indices        map[string]map[string]map[string][]string
 	persistence    common.PersistenceProvider
 	idGeneratorMgr *IDGeneratorManager
@@ -25,6 +26,20 @@ type Engine struct {
 type EngineConfig struct {
 	Persistence       common.PersistenceProvider
 	EnablePersistence bool
+}
+
+// createEntityKey creates a composite key from an entity type and ID
+func createEntityKey(entityType, id string) string {
+	return fmt.Sprintf("%s:%s", entityType, id)
+}
+
+// parseEntityKey parses a composite key into entity type and ID
+func parseEntityKey(key string) (string, string) {
+	parts := strings.SplitN(key, ":", 2)
+	if len(parts) != 2 {
+		return "", key // Fallback for backward compatibility
+	}
+	return parts[0], parts[1]
 }
 
 // NewDataStoreEngine creates a new data store engine instance
@@ -214,9 +229,10 @@ func (dse *Engine) prepareEntityForInsert(entityType string, id string, data map
 		return common.Entity{}, err
 	}
 
-	// Check if ID already exists
-	if _, exists := dse.entities[id]; exists {
-		return common.Entity{}, fmt.Errorf("entity with ID %s already exists", id)
+	// Check if ID already exists using the composite key
+	entityKey := createEntityKey(entityType, id)
+	if _, exists := dse.entities[entityKey]; exists {
+		return common.Entity{}, fmt.Errorf("entity with ID %s already exists for entity type %s", id, entityType)
 	}
 
 	// Create the entity
@@ -271,6 +287,9 @@ func (dse *Engine) Insert(entityType string, id string, data map[string]interfac
 		return err
 	}
 
+	// Create composite key
+	entityKey := createEntityKey(entityType, id)
+
 	// Now acquire write lock and check again to handle race conditions
 	dse.mu.Lock()
 
@@ -280,17 +299,17 @@ func (dse *Engine) Insert(entityType string, id string, data map[string]interfac
 		return fmt.Errorf("entity type %s not registered", entityType)
 	}
 
-	if _, exists := dse.entities[id]; exists {
+	if _, exists := dse.entities[entityKey]; exists {
 		dse.mu.Unlock()
 		if generatedID {
 			// If we generated the ID and there's still a collision, something is wrong with our ID generator
-			return fmt.Errorf("generated ID %s already exists, this should not happen", id)
+			return fmt.Errorf("generated ID %s already exists for entity type %s, this should not happen", id, entityType)
 		}
-		return fmt.Errorf("entity with ID %s already exists", id)
+		return fmt.Errorf("entity with ID %s already exists for entity type %s", id, entityType)
 	}
 
 	// Store the entity and update indices
-	dse.entities[id] = entity
+	dse.entities[entityKey] = entity
 	dse.updateIndices(entity, true)
 
 	// Store reference to persistence provider and release lock
@@ -302,11 +321,11 @@ func (dse *Engine) Insert(entityType string, id string, data map[string]interfac
 		if err := persistenceProvider.Insert(dse, entityType, id, data); err != nil {
 			// If persistence fails, we need to remove the entity from memory
 			dse.mu.Lock()
-			delete(dse.entities, id)
+			delete(dse.entities, entityKey)
 			// Update indices needs the entity to still be in entities, so we add it back temporarily
-			dse.entities[id] = entity
+			dse.entities[entityKey] = entity
 			dse.updateIndices(entity, false)
-			delete(dse.entities, id)
+			delete(dse.entities, entityKey)
 			dse.mu.Unlock()
 
 			return fmt.Errorf("failed to persist entity: %w", err)
@@ -333,7 +352,29 @@ func (dse *Engine) Insert(entityType string, id string, data map[string]interfac
 func (dse *Engine) Update(id string, data map[string]interface{}) error {
 	// First, read the current state without write lock
 	dse.mu.RLock()
-	entity, exists := dse.entities[id]
+
+	// Find the entity by iterating through the map (backward compatibility)
+	var entity common.Entity
+	var entityKey string
+	var exists bool
+
+	// First try to find by direct ID (backward compatibility)
+	entity, exists = dse.entities[id]
+	if exists {
+		entityKey = id
+	} else {
+		// If not found, check for composite keys
+		for key, e := range dse.entities {
+			_, entityID := parseEntityKey(key)
+			if entityID == id {
+				entity = e
+				entityKey = key
+				exists = true
+				break
+			}
+		}
+	}
+
 	if !exists {
 		dse.mu.RUnlock()
 		return fmt.Errorf("entity with ID %s not found", id)
@@ -368,7 +409,7 @@ func (dse *Engine) Update(id string, data map[string]interface{}) error {
 	dse.mu.Lock()
 
 	// Check again if the entity exists
-	entity, exists = dse.entities[id]
+	entity, exists = dse.entities[entityKey]
 	if !exists {
 		dse.mu.Unlock()
 		return fmt.Errorf("entity with ID %s not found", id)
@@ -381,7 +422,7 @@ func (dse *Engine) Update(id string, data map[string]interface{}) error {
 	for k, v := range data {
 		entity.Fields[k] = v
 	}
-	dse.entities[id] = entity
+	dse.entities[entityKey] = entity
 
 	// Add new index entries
 	dse.updateIndices(entity, true)
@@ -396,11 +437,11 @@ func (dse *Engine) Update(id string, data map[string]interface{}) error {
 			// Rollback in-memory state on error
 			dse.mu.Lock()
 			// Remove updated indices
-			entity = dse.entities[id]
+			entity = dse.entities[entityKey]
 			dse.updateIndices(entity, false)
 
 			// Restore original entity
-			dse.entities[id] = originalEntity
+			dse.entities[entityKey] = originalEntity
 			dse.updateIndices(originalEntity, true)
 			dse.mu.Unlock()
 
@@ -415,7 +456,29 @@ func (dse *Engine) Update(id string, data map[string]interface{}) error {
 func (dse *Engine) Delete(id string) error {
 	// First read the current state without write lock
 	dse.mu.RLock()
-	entity, exists := dse.entities[id]
+
+	// Find the entity by iterating through the map (backward compatibility)
+	var entity common.Entity
+	var entityKey string
+	var exists bool
+
+	// First try to find by direct ID (backward compatibility)
+	entity, exists = dse.entities[id]
+	if exists {
+		entityKey = id
+	} else {
+		// If not found, check for composite keys
+		for key, e := range dse.entities {
+			_, entityID := parseEntityKey(key)
+			if entityID == id {
+				entity = e
+				entityKey = key
+				exists = true
+				break
+			}
+		}
+	}
+
 	if !exists {
 		dse.mu.RUnlock()
 		return fmt.Errorf("entity with ID %s not found", id)
@@ -464,7 +527,7 @@ func (dse *Engine) Delete(id string) error {
 	dse.mu.Lock()
 
 	// Check again if the entity exists
-	entity, exists = dse.entities[id]
+	_, exists = dse.entities[entityKey]
 	if !exists {
 		dse.mu.Unlock()
 		return fmt.Errorf("entity with ID %s not found", id)
@@ -474,7 +537,7 @@ func (dse *Engine) Delete(id string) error {
 	dse.updateIndices(entity, false)
 
 	// Delete the entity
-	delete(dse.entities, id)
+	delete(dse.entities, entityKey)
 
 	// Store reference to persistence provider and release lock
 	persistenceProvider := dse.persistence
@@ -486,7 +549,7 @@ func (dse *Engine) Delete(id string) error {
 		if err := persistenceProvider.Delete(dse, id, entityType); err != nil {
 			// Rollback in-memory state on error
 			dse.mu.Lock()
-			dse.entities[id] = originalEntity
+			dse.entities[entityKey] = originalEntity
 			dse.updateIndices(originalEntity, true)
 			dse.mu.Unlock()
 
@@ -502,12 +565,21 @@ func (dse *Engine) Get(id string) (common.Entity, error) {
 	dse.mu.RLock()
 	defer dse.mu.RUnlock()
 
+	// Try direct lookup first (backward compatibility)
 	entity, exists := dse.entities[id]
-	if !exists {
-		return common.Entity{}, fmt.Errorf("entity with ID %s not found", id)
+	if exists {
+		return entity, nil
 	}
 
-	return entity, nil
+	// If not found, search through all entities
+	for key, entity := range dse.entities {
+		_, entityID := parseEntityKey(key)
+		if entityID == id {
+			return entity, nil
+		}
+	}
+
+	return common.Entity{}, fmt.Errorf("entity with ID %s not found", id)
 }
 
 // ForceSnapshot immediately creates a snapshot of the current state
@@ -548,6 +620,9 @@ func (dse *Engine) GetAllEntitiesOfType(entityType string) ([]common.Entity, err
 	}
 
 	entities := make([]common.Entity, 0)
+
+	// Iterate through all entities and filter by type
+	// For both legacy and new composite keys
 	for _, entity := range dse.entities {
 		if entity.Type == entityType {
 			entities = append(entities, entity)
@@ -731,4 +806,30 @@ func (dse *Engine) LoadDeletedIDs(entityType string, deletedIDs map[string]bool)
 
 	autoGen.LoadDeletedIDs(entityType, deletedIDs)
 	return nil
+}
+
+// MigrateToCompositeKeys migrates the existing entity storage from flat keys to composite keys
+// This function should be called during startup if there's a need to migrate older data
+func (dse *Engine) MigrateToCompositeKeys() {
+	dse.mu.Lock()
+	defer dse.mu.Unlock()
+
+	// Create a temp map to hold migrated entities
+	migratedEntities := make(map[string]common.Entity)
+
+	// Process all entities
+	for key, entity := range dse.entities {
+		// Check if this is already a composite key
+		if strings.Contains(key, ":") {
+			migratedEntities[key] = entity
+			continue
+		}
+
+		// This is an old-style key, create a composite key
+		newKey := createEntityKey(entity.Type, entity.ID)
+		migratedEntities[newKey] = entity
+	}
+
+	// Replace the old map with the migrated one
+	dse.entities = migratedEntities
 }

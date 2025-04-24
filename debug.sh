@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -e
 
-# SyncopateDB Demo Script
-# This script demonstrates creating an entity type, inserting entities, and querying
-# Usage: ./syncopate_demo.sh [host] [port]
+# SyncopateDB Complete Demo Script
+# This script creates Product and Order entity types and populates them with data
+# Usage: ./syncopate_complete_demo.sh [host] [port]
 
 # Default values
 HOST=${1:-localhost}
@@ -54,6 +54,7 @@ function make_request() {
 
   echo "${body}"
 }
+
 # Check if server is running
 echo -e "${YELLOW}Checking if SyncopateDB server is running...${NC}"
 SERVER_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "http://${HOST}:${PORT}/health")
@@ -67,9 +68,13 @@ fi
 echo -e "${GREEN}✓ Server is running!${NC}"
 echo
 
-# Step 1: Create a Product entity type with nullable fields
-echo -e "${YELLOW}Step 1: Creating a Product entity type with nullable fields${NC}"
-ENTITY_TYPE_DEFINITION='{
+###########################################
+# PART 1: PRODUCT ENTITY TYPE AND DATA
+###########################################
+
+# Step 1: Create a Product entity type
+echo -e "${YELLOW}Step 1: Creating a Product entity type${NC}"
+PRODUCT_TYPE_DEFINITION='{
   "name": "Product",
   "fields": [
     {
@@ -122,10 +127,11 @@ ENTITY_TYPE_DEFINITION='{
     }
   ]
 }'
-CREATE_ENTITY_RESPONSE=$(make_request "POST" "/entity-types" "$ENTITY_TYPE_DEFINITION")
+
+CREATE_PRODUCT_TYPE_RESPONSE=$(make_request "POST" "/entity-types" "$PRODUCT_TYPE_DEFINITION")
 echo
 
-# Step 2: Insert some product entities
+# Step 2: Insert product entities
 echo -e "${YELLOW}Step 2: Inserting product entities${NC}"
 
 # Product 1
@@ -136,7 +142,8 @@ PRODUCT1='{
     "category": "Electronics",
     "inStock": true,
     "description": "A powerful laptop for developers",
-    "createdAt": "2025-04-20T10:00:00Z"
+    "createdAt": "2025-04-20T10:00:00Z",
+    "tags": ["laptop", "computer", "work"]
   }
 }'
 
@@ -153,12 +160,12 @@ PRODUCT2='{
     "category": "Kitchen",
     "inStock": true,
     "description": "Makes delicious coffee every morning",
-    "createdAt": "2025-04-21T11:30:00Z"
+    "createdAt": "2025-04-21T11:30:00Z",
+    "tags": ["coffee", "kitchen", "appliance"]
   }
 }'
 
 PRODUCT2_RESPONSE=$(make_request "POST" "/entities/Product" "$PRODUCT2")
-# Updated to extract numeric IDs instead of string IDs
 PRODUCT2_ID=$(echo $PRODUCT2_RESPONSE | grep -o '"id":[0-9]*' | cut -d':' -f2)
 echo "Created Product with ID: $PRODUCT2_ID"
 echo
@@ -171,24 +178,211 @@ PRODUCT3='{
     "category": "Electronics",
     "inStock": false,
     "description": "Noise-cancelling headphones for immersive sound",
-    "createdAt": "2025-04-22T09:15:00Z"
+    "createdAt": "2025-04-22T09:15:00Z",
+    "tags": ["audio", "music", "entertainment"]
   }
 }'
 
 PRODUCT3_RESPONSE=$(make_request "POST" "/entities/Product" "$PRODUCT3")
-# Updated to extract numeric IDs instead of string IDs
 PRODUCT3_ID=$(echo $PRODUCT3_RESPONSE | grep -o '"id":[0-9]*' | cut -d':' -f2)
 echo "Created Product with ID: $PRODUCT3_ID"
 echo
 
-# Step 3: Query for all products
-echo -e "${YELLOW}Step 3: Querying all products${NC}"
+# Product 4
+PRODUCT4='{
+  "fields": {
+    "name": "Wireless Mouse",
+    "price": 29.99,
+    "category": "Electronics",
+    "inStock": true,
+    "description": "Ergonomic wireless mouse with long battery life",
+    "createdAt": "2025-04-23T14:45:00Z",
+    "tags": ["computer", "accessory", "ergonomic"]
+  }
+}'
+
+PRODUCT4_RESPONSE=$(make_request "POST" "/entities/Product" "$PRODUCT4")
+PRODUCT4_ID=$(echo $PRODUCT4_RESPONSE | grep -o '"id":[0-9]*' | cut -d':' -f2)
+echo "Created Product with ID: $PRODUCT4_ID"
+echo
+
+# Step A3: Query all products to verify insertion
+echo -e "${YELLOW}Step 3: Verifying all products were created${NC}"
 ALL_PRODUCTS=$(make_request "GET" "/entities/Product" "")
 echo
 
-# Step 4: Query with filtering
-echo -e "${YELLOW}Step 4: Querying electronics products${NC}"
-QUERY='{
+###########################################
+# PART 2: ORDER ENTITY TYPE AND DATA
+###########################################
+
+# Step 4: Create an Order entity type
+echo -e "${YELLOW}Step 4: Creating an Order entity type${NC}"
+ORDER_TYPE_DEFINITION='{
+  "name": "Order",
+  "fields": [
+    {
+      "name": "customerId",
+      "type": "string",
+      "indexed": true,
+      "required": true
+    },
+    {
+      "name": "products",
+      "type": "json",
+      "indexed": false,
+      "required": true
+    },
+    {
+      "name": "totalAmount",
+      "type": "float",
+      "indexed": true,
+      "required": true
+    },
+    {
+      "name": "status",
+      "type": "string",
+      "indexed": true,
+      "required": true
+    },
+    {
+      "name": "orderDate",
+      "type": "datetime",
+      "indexed": true,
+      "required": true
+    }
+  ]
+}'
+
+CREATE_ORDER_TYPE_RESPONSE=$(make_request "POST" "/entity-types" "$ORDER_TYPE_DEFINITION")
+echo
+
+# Step 5: Insert order entities
+echo -e "${YELLOW}Step 5: Inserting order entities${NC}"
+
+# Order 1: A customer buying a laptop
+ORDER1='{
+  "fields": {
+    "customerId": "cust_001",
+    "products": [
+      {
+        "productId": '${PRODUCT1_ID}',
+        "name": "Laptop",
+        "quantity": 1,
+        "unitPrice": 999.99
+      }
+    ],
+    "totalAmount": 999.99,
+    "status": "Shipped",
+    "orderDate": "2025-04-23T14:30:00Z"
+  }
+}'
+
+ORDER1_RESPONSE=$(make_request "POST" "/entities/Order" "$ORDER1")
+ORDER1_ID=$(echo $ORDER1_RESPONSE | grep -o '"id":[0-9]*' | cut -d':' -f2)
+echo "Created Order with ID: $ORDER1_ID"
+echo
+
+# Order 2: A customer buying coffee maker and headphones
+ORDER2='{
+  "fields": {
+    "customerId": "cust_002",
+    "products": [
+      {
+        "productId": '${PRODUCT2_ID}',
+        "name": "Coffee Maker",
+        "quantity": 1,
+        "unitPrice": 49.99
+      },
+      {
+        "productId": '${PRODUCT3_ID}',
+        "name": "Headphones",
+        "quantity": 2,
+        "unitPrice": 79.99
+      }
+    ],
+    "totalAmount": 209.97,
+    "status": "Processing",
+    "orderDate": "2025-04-24T09:15:00Z"
+  }
+}'
+
+ORDER2_RESPONSE=$(make_request "POST" "/entities/Order" "$ORDER2")
+ORDER2_ID=$(echo $ORDER2_RESPONSE | grep -o '"id":[0-9]*' | cut -d':' -f2)
+echo "Created Order with ID: $ORDER2_ID"
+echo
+
+# Order 3: A customer buying multiple products
+ORDER3='{
+  "fields": {
+    "customerId": "cust_003",
+    "products": [
+      {
+        "productId": '${PRODUCT1_ID}',
+        "name": "Laptop",
+        "quantity": 1,
+        "unitPrice": 999.99
+      },
+      {
+        "productId": '${PRODUCT2_ID}',
+        "name": "Coffee Maker",
+        "quantity": 1,
+        "unitPrice": 49.99
+      },
+      {
+        "productId": '${PRODUCT3_ID}',
+        "name": "Headphones",
+        "quantity": 1,
+        "unitPrice": 79.99
+      }
+    ],
+    "totalAmount": 1129.97,
+    "status": "Pending",
+    "orderDate": "2025-04-24T10:45:00Z"
+  }
+}'
+
+ORDER3_RESPONSE=$(make_request "POST" "/entities/Order" "$ORDER3")
+ORDER3_ID=$(echo $ORDER3_RESPONSE | grep -o '"id":[0-9]*' | cut -d':' -f2)
+echo "Created Order with ID: $ORDER3_ID"
+echo
+
+# Order 4: A customer buying wireless mouse
+ORDER4='{
+  "fields": {
+    "customerId": "cust_004",
+    "products": [
+      {
+        "productId": '${PRODUCT4_ID}',
+        "name": "Wireless Mouse",
+        "quantity": 2,
+        "unitPrice": 29.99
+      }
+    ],
+    "totalAmount": 59.98,
+    "status": "Delivered",
+    "orderDate": "2025-04-22T16:20:00Z"
+  }
+}'
+
+ORDER4_RESPONSE=$(make_request "POST" "/entities/Order" "$ORDER4")
+ORDER4_ID=$(echo $ORDER4_RESPONSE | grep -o '"id":[0-9]*' | cut -d':' -f2)
+echo "Created Order with ID: $ORDER4_ID"
+echo
+
+# Step 6: Query all orders to verify insertion
+echo -e "${YELLOW}Step 6: Verifying all orders were created${NC}"
+ALL_ORDERS=$(make_request "GET" "/entities/Order" "")
+echo
+
+###########################################
+# PART 3: DATA OPERATIONS AND QUERIES
+###########################################
+
+# Step 7: Perform some interesting queries
+
+# 7.1: Find all electronics products
+echo -e "${YELLOW}Step 7.1: Finding all electronics products${NC}"
+ELECTRONICS_QUERY='{
   "entityType": "Product",
   "filters": [
     {
@@ -201,107 +395,85 @@ QUERY='{
   "orderDesc": true
 }'
 
-FILTERED_PRODUCTS=$(make_request "POST" "/query" "$QUERY")
+ELECTRONICS_PRODUCTS=$(make_request "POST" "/query" "$ELECTRONICS_QUERY")
 echo
 
-# Step 5: Get a specific product
-echo -e "${YELLOW}Step 5: Getting a specific product${NC}"
-SPECIFIC_PRODUCT=$(make_request "GET" "/entities/Product/${PRODUCT1_ID}" "")
+# 7.2: Find all orders with a value over $200
+echo -e "${YELLOW}Step 7.2: Finding orders over $200${NC}"
+HIGH_VALUE_QUERY='{
+  "entityType": "Order",
+  "filters": [
+    {
+      "field": "totalAmount",
+      "operator": "gt",
+      "value": 200
+    }
+  ],
+  "orderBy": "totalAmount",
+  "orderDesc": true
+}'
+
+HIGH_VALUE_ORDERS=$(make_request "POST" "/query" "$HIGH_VALUE_QUERY")
 echo
 
-# Step 6: Update a product
-echo -e "${YELLOW}Step 6: Updating a product${NC}"
-UPDATE='{
+# 7.3: Find all orders in "Processing" status
+echo -e "${YELLOW}Step 7.3: Finding orders in 'Processing' status${NC}"
+PROCESSING_QUERY='{
+  "entityType": "Order",
+  "filters": [
+    {
+      "field": "status",
+      "operator": "eq",
+      "value": "Processing"
+    }
+  ]
+}'
+
+PROCESSING_ORDERS=$(make_request "POST" "/query" "$PROCESSING_QUERY")
+echo
+
+# Step 8: Update operations
+
+# 8.1: Update the price of the laptop
+echo -e "${YELLOW}Step 8.1: Updating the laptop price${NC}"
+LAPTOP_UPDATE='{
   "fields": {
     "price": 899.99,
     "description": "A powerful laptop for developers - Now on sale!"
   }
 }'
 
-UPDATE_RESPONSE=$(make_request "PUT" "/entities/Product/${PRODUCT1_ID}" "$UPDATE")
+LAPTOP_UPDATE_RESPONSE=$(make_request "PUT" "/entities/Product/${PRODUCT1_ID}" "$LAPTOP_UPDATE")
 echo
 
-# Verify the update
-echo -e "${YELLOW}Verifying the update:${NC}"
-UPDATED_PRODUCT=$(make_request "GET" "/entities/Product/${PRODUCT1_ID}" "")
-echo
-
-# Step 7: Get entity type definition
-echo -e "${YELLOW}Step 7: Getting entity type definition${NC}"
-ENTITY_TYPE_INFO=$(make_request "GET" "/entity-types/Product" "")
-echo
-
-# Step 8: Create a product with null fields
-echo -e "${YELLOW}Step 8: Creating a product with null fields${NC}"
-PRODUCT_WITH_NULLS='{
+# 8.2: Update an order status
+echo -e "${YELLOW}Step 8.2: Updating order status${NC}"
+ORDER_UPDATE='{
   "fields": {
-    "name": "Wireless Mouse",
-    "price": 29.99,
-    "category": "Electronics",
-    "inStock": true,
-    "description": null,
-    "createdAt": null,
-    "tags": null
+    "status": "Delivered"
   }
 }'
 
-PRODUCT_NULL_RESPONSE=$(make_request "POST" "/entities/Product" "$PRODUCT_WITH_NULLS")
-# Updated to extract numeric IDs instead of string IDs
-PRODUCT_NULL_ID=$(echo $PRODUCT_NULL_RESPONSE | grep -o '"id":[0-9]*' | cut -d':' -f2)
-echo "Created Product with ID: $PRODUCT_NULL_ID"
+ORDER_UPDATE_RESPONSE=$(make_request "PUT" "/entities/Order/${ORDER1_ID}" "$ORDER_UPDATE")
 echo
 
-# Display the product with null fields
-echo -e "${YELLOW}Verifying the product with null fields:${NC}"
-NULL_FIELDS_PRODUCT=$(make_request "GET" "/entities/Product/${PRODUCT_NULL_ID}" "")
+# 8.3: Verify updates
+echo -e "${YELLOW}Step 8.3: Verifying updates${NC}"
+UPDATED_LAPTOP=$(make_request "GET" "/entities/Product/${PRODUCT1_ID}" "")
 echo
-
-# Step 9: Update a field to null
-echo -e "${YELLOW}Step 9: Updating a product to have a null field${NC}"
-NULL_UPDATE='{
-  "fields": {
-    "category": null,
-    "description": "Updated with a null category"
-  }
-}'
-
-NULL_UPDATE_RESPONSE=$(make_request "PUT" "/entities/Product/${PRODUCT1_ID}" "$NULL_UPDATE")
-echo
-
-# Verify the null update
-echo -e "${YELLOW}Verifying the update with null field:${NC}"
-NULL_UPDATED_PRODUCT=$(make_request "GET" "/entities/Product/${PRODUCT1_ID}" "")
-echo
-
-# Step 10: Query for products with null fields
-echo -e "${YELLOW}Step 10: Querying products with null category${NC}"
-NULL_QUERY='{
-  "entityType": "Product",
-  "filters": [
-    {
-      "field": "category",
-      "operator": "eq",
-      "value": null
-    }
-  ]
-}'
-
-NULL_FILTERED_PRODUCTS=$(make_request "POST" "/query" "$NULL_QUERY")
+UPDATED_ORDER=$(make_request "GET" "/entities/Order/${ORDER1_ID}" "")
 echo
 
 # Summary
 echo -e "${GREEN}Demo completed successfully!${NC}"
 echo -e "The script:"
-echo -e "1. Created a Product entity type with nullable fields"
-echo -e "2. Inserted 3 product entities with different properties"
-echo -e "3. Queried all products"
-echo -e "4. Queried products filtered by category"
-echo -e "5. Retrieved a specific product by ID"
-echo -e "6. Updated a product's price and description"
-echo -e "7. Retrieved the Product entity type definition"
-echo -e "8. Created a product with explicit null fields"
-echo -e "9. Updated a product to have a null category field"
-echo -e "10. Queried products with null category fields"
+echo -e "1. Created Product and Order entity types"
+echo -e "2. Added 4 products (Laptop, Coffee Maker, Headphones, and Wireless Mouse)"
+echo -e "3. Added 4 orders with various products"
+echo -e "4. Performed queries on products by category"
+echo -e "5. Performed queries on orders by value and status"
+echo -e "6. Updated product details and order status"
 echo
-echo -e "You can now interact with these entities using the SyncopateDB API."
-echo -e "Access your data at: ${BLUE}http://${HOST}:${PORT}/api/v1/entities/Product${NC}"
+echo -e "You can now interact with these entities using the SyncopateDB API:"
+echo -e "Products: ${BLUE}http://${HOST}:${PORT}/api/v1/entities/Product${NC}"
+echo -e "Orders: ${BLUE}http://${HOST}:${PORT}/api/v1/entities/Order${NC}"

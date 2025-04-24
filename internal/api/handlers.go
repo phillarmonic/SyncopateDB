@@ -79,7 +79,7 @@ func (s *Server) handleCreateEntityType(w http.ResponseWriter, r *http.Request) 
 	}
 	defer r.Body.Close()
 
-	// Note: If IDGenerator is empty string, auto_increment will be used as default
+	// Note: If IDGenerator is an empty string, auto_increment will be used as default
 	if err := s.engine.RegisterEntityType(def); err != nil {
 		s.respondWithError(w, http.StatusBadRequest, err.Error())
 		return
