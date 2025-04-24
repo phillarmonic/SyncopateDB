@@ -32,6 +32,7 @@ type Configuration struct {
 	EnableWAL     bool     `json:"enable_wal"`
 	EnableZSTD    bool     `json:"enable_zstd"`
 	ColorizedLogs bool     `json:"colorized_logs"` // New setting for colored logs
+	ServerStarted bool     `json:"server_started"` // New setting for server-started status
 }
 
 var Config Configuration
@@ -68,6 +69,10 @@ func loadEnvString(key string, defaultVal string) string {
 	return defaultVal
 }
 
+func SetServerStarted(status bool) {
+	Config.ServerStarted = status
+}
+
 func init() {
 	logLevel := LogLevel(loadEnvString("LOG_LEVEL", string(LogLevelInfo)))
 
@@ -77,7 +82,8 @@ func init() {
 		LogLevel:      logLevel,
 		EnableWAL:     loadEnvBool("ENABLE_WAL", true),
 		EnableZSTD:    loadEnvBool("ENABLE_ZSTD", false),
-		ColorizedLogs: loadEnvBool("COLORIZED_LOGS", true), // Default to colored logs
+		ColorizedLogs: loadEnvBool("COLORIZED_LOGS", true),
+		ServerStarted: false,
 	}
 
 	if err := Config.Validate(); err != nil {

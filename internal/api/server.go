@@ -171,6 +171,8 @@ func (s *Server) Start() error {
 		IdleTimeout:  s.config.IdleTimeout,
 	}
 
+	settings.SetServerStarted(true)
+
 	if s.config.DebugMode {
 		// Debug mode: run server in the main thread to allow easier debugging
 		s.logger.Info("Starting server in DEBUG mode (synchronous) on " + addr)
@@ -179,7 +181,7 @@ func (s *Server) Start() error {
 		// Normal mode: run server in a goroutine with graceful shutdown
 		s.logger.Info("Starting server in NORMAL mode (with goroutine) on " + addr)
 
-		// Start server in a goroutine
+		// Start the server in a goroutine
 		go func() {
 			if err := s.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 				s.logger.Fatalf("Could not start server: %v", err)
