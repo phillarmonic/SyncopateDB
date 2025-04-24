@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sort"
 	"sync"
 	"time"
 
@@ -112,6 +113,8 @@ func (s *Server) setupRoutes() {
 	// Add a debug endpoint if in debug mode
 	if s.config.DebugMode {
 		s.router.HandleFunc("/debug", s.handleDebug).Methods(http.MethodGet)
+		// Add our new entities debug endpoint
+		s.router.HandleFunc("/debug/entities", s.handleDebugEntities).Methods(http.MethodGet)
 	}
 }
 
@@ -226,6 +229,69 @@ func (s *Server) logMiddleware(next http.Handler) http.Handler {
 			"ip":       r.RemoteAddr,
 		}).Info("Request completed")
 	})
+}
+
+// handleDebugEntities provides a debug endpoint for inspecting entity storage
+func (s *Server) handleDebugEntities(w http.ResponseWriter, r *http.Request) {
+	// Get entity type from query parameter
+	entityType := r.URL.Query().Get("type")
+
+	// Create response structure
+	type EntityDebugInfo struct {
+		ID          string                 `json:"id"`
+		StorageKey  string                 `json:"storage_key"`
+		Type        string                 `json:"type"`
+		IDGenerator string                 `json:"id_generator"`
+		Fields      map[string]interface{} `json:"fields"`
+	}
+
+	debug := struct {
+		EntityType string            `json:"entity_type"`
+		Entities   []EntityDebugInfo `json:"entities"`
+		AllMapKeys []string          `json:"all_map_keys"`
+	}{
+		EntityType: entityType,
+		Entities:   []EntityDebugInfo{},
+		AllMapKeys: []string{},
+	}
+
+	// Use reflection to access the engine's entities map
+	if engine, ok := s.engine.(*datastore.Engine); ok {
+		// Get direct access to the entities map for debugging
+		engine.DebugInspectEntities(func(entities map[string]common.Entity) {
+			// Store all keys from the map for analysis
+			for key := range entities {
+				debug.AllMapKeys = append(debug.AllMapKeys, key)
+			}
+
+			// If a specific entity type is requested, filter for that type
+			if entityType != "" {
+				for key, entity := range entities {
+					if entity.Type == entityType {
+						// Get the ID generator type
+						idGenType := "unknown"
+						if def, err := s.engine.GetEntityDefinition(entity.Type); err == nil {
+							idGenType = string(def.IDGenerator)
+						}
+
+						debug.Entities = append(debug.Entities, EntityDebugInfo{
+							ID:          entity.ID,
+							StorageKey:  key, // This is the actual key used in the map
+							Type:        entity.Type,
+							IDGenerator: idGenType,
+							Fields:      entity.Fields,
+						})
+					}
+				}
+			}
+		})
+	}
+
+	// Sort the keys for easier analysis
+	sort.Strings(debug.AllMapKeys)
+
+	// Return the debug information
+	s.respondWithJSON(w, http.StatusOK, debug, true)
 }
 
 // responseWriter is a wrapper around http.ResponseWriter that captures the status code

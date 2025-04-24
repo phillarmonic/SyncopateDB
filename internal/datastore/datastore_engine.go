@@ -411,7 +411,7 @@ func (dse *Engine) Delete(id string) error {
 		return fmt.Errorf("entity with ID %s not found", id)
 	}
 
-	// Make a copy of the entity for rollback
+	// Make a copy of the entity for persistence and rollback
 	originalEntity := common.Entity{
 		ID:     entity.ID,
 		Type:   entity.Type,
@@ -421,6 +421,9 @@ func (dse *Engine) Delete(id string) error {
 	for k, v := range entity.Fields {
 		originalEntity.Fields[k] = v
 	}
+
+	// Store the entity type for persistence
+	entityType := entity.Type
 
 	dse.mu.RUnlock()
 
@@ -446,7 +449,8 @@ func (dse *Engine) Delete(id string) error {
 
 	// Persist deletion if persistence is enabled
 	if persistenceProvider != nil {
-		if err := persistenceProvider.Delete(dse, id); err != nil {
+		// Pass the entity type we saved earlier
+		if err := persistenceProvider.Delete(dse, id, entityType); err != nil {
 			// Rollback in-memory state on error
 			dse.mu.Lock()
 			dse.entities[id] = originalEntity
@@ -617,4 +621,19 @@ func (dse *Engine) addInternalFieldDefinitions(def *common.EntityDefinition) {
 	}
 
 	def.Fields = append(def.Fields, createdAtField, updatedAtField)
+}
+
+// DebugInspectEntities provides direct access to the entities map for debugging purposes
+// This should only be used in development environments
+func (dse *Engine) DebugInspectEntities(inspector func(map[string]common.Entity)) {
+	dse.mu.RLock()
+	defer dse.mu.RUnlock()
+
+	// Create a copy of the map to avoid exposing the internal map directly
+	entitiesCopy := make(map[string]common.Entity, len(dse.entities))
+	for k, v := range dse.entities {
+		entitiesCopy[k] = v
+	}
+
+	inspector(entitiesCopy)
 }

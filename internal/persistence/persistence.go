@@ -451,23 +451,19 @@ func (pe *Engine) Update(store common.DatastoreEngine, entityID string, data map
 }
 
 // Delete removes an entity and persists the deletion
-func (pe *Engine) Delete(store common.DatastoreEngine, entityID string) error {
-	// Get the entity to determine its type
-	entity, err := store.Get(entityID)
-	if err != nil {
-		return err
-	}
+func (pe *Engine) Delete(store common.DatastoreEngine, entityID string, entityType string) error {
+	// No need to look up the entity anymore, we have the entityType parameter
 
 	// If WAL is disabled, delete it directly from the database
 	if !settings.Config.EnableWAL {
-		key := fmt.Sprintf("entity:%s:%s", entity.Type, entityID)
+		key := fmt.Sprintf("entity:%s:%s", entityType, entityID)
 		return pe.db.Update(func(txn *badger.Txn) error {
 			return txn.Delete([]byte(key))
 		})
 	}
 
 	// Write to WAL
-	return pe.WriteWALEntry(OpDeleteEntity, entity.Type, entityID, nil)
+	return pe.WriteWALEntry(OpDeleteEntity, entityType, entityID, nil)
 }
 
 // RunValueLogGC runs garbage collection on the value log

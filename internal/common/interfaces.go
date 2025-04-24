@@ -11,7 +11,7 @@ type PersistenceProvider interface {
 	RegisterEntityType(store DatastoreEngine, def EntityDefinition) error
 	Insert(store DatastoreEngine, entityType, entityID string, data map[string]interface{}) error
 	Update(store DatastoreEngine, entityID string, data map[string]interface{}) error
-	Delete(store DatastoreEngine, entityID string) error
+	Delete(store DatastoreEngine, entityID string, entityType string) error // Updated signature
 
 	// Snapshot and recovery operations
 	TakeSnapshot(store DatastoreEngine) error

@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"github.com/phillarmonic/syncopate-db/internal/settings"
+	"github.com/sirupsen/logrus"
 	"net/http"
 	"os"
 	"strconv"
@@ -266,16 +267,24 @@ func (s *Server) handleGetEntity(w http.ResponseWriter, r *http.Request) {
 	rawID := vars["id"]
 	entityType := vars["type"]
 
-	// Get the entity definition to determine ID type
-	_, err := s.engine.GetEntityDefinition(entityType)
+	// Normalize the ID based on entity type's ID generator
+	normalizedID, err := s.normalizeEntityID(entityType, rawID)
 	if err != nil {
 		s.respondWithError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	// For auto_increment types, the ID is always stored as a string internally
-	// We don't need to convert anything for the lookup
-	entity, err := s.engine.Get(rawID)
+	// Add debugging information in development mode
+	if s.config.DebugMode {
+		s.logger.WithFields(logrus.Fields{
+			"entityType":   entityType,
+			"rawID":        rawID,
+			"normalizedID": normalizedID,
+		}).Debug("Getting entity")
+	}
+
+	// Use the normalized ID for the get operation
+	entity, err := s.engine.Get(normalizedID)
 	if err != nil {
 		s.respondWithError(w, http.StatusNotFound, err.Error())
 		return
@@ -292,13 +301,6 @@ func (s *Server) handleUpdateEntity(w http.ResponseWriter, r *http.Request) {
 	rawID := vars["id"]
 	entityType := vars["type"]
 
-	// Get entity definition to determine ID type
-	def, err := s.engine.GetEntityDefinition(entityType)
-	if err != nil {
-		s.respondWithError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
 	var updateData struct {
 		Fields map[string]interface{} `json:"fields"`
 	}
@@ -309,25 +311,45 @@ func (s *Server) handleUpdateEntity(w http.ResponseWriter, r *http.Request) {
 	}
 	defer r.Body.Close()
 
-	// Always use the raw string ID for internal operations
-	if err := s.engine.Update(rawID, updateData.Fields); err != nil {
+	// Normalize the ID based on entity type's ID generator
+	normalizedID, err := s.normalizeEntityID(entityType, rawID)
+	if err != nil {
 		s.respondWithError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	// Format the response ID based on entity type's ID generator
-	var responseID interface{} = rawID
+	// Add debugging information in development mode
+	if s.config.DebugMode {
+		s.logger.WithFields(logrus.Fields{
+			"entityType":   entityType,
+			"rawID":        rawID,
+			"normalizedID": normalizedID,
+		}).Debug("Updating entity")
+	}
 
-	// If it's an auto_increment type, convert to int for API response
-	if def.IDGenerator == common.IDTypeAutoIncrement {
+	// Use the normalized ID for the update operation
+	if err := s.engine.Update(normalizedID, updateData.Fields); err != nil {
+		s.respondWithError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Get entity definition to determine how to format the response ID
+	def, err := s.engine.GetEntityDefinition(entityType)
+	if err == nil && def.IDGenerator == common.IDTypeAutoIncrement {
+		// For auto-increment, convert back to int for the response
 		if intID, err := strconv.Atoi(rawID); err == nil {
-			responseID = intID
+			s.respondWithJSON(w, http.StatusOK, map[string]interface{}{
+				"message": "Entity updated successfully",
+				"id":      intID,
+			})
+			return
 		}
 	}
 
+	// For other types or if conversion fails, use the raw ID
 	s.respondWithJSON(w, http.StatusOK, map[string]interface{}{
 		"message": "Entity updated successfully",
-		"id":      responseID,
+		"id":      rawID,
 	})
 }
 
@@ -344,8 +366,73 @@ func (s *Server) handleDeleteEntity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Always use the raw string ID for internal operations
-	if err := s.engine.Delete(rawID); err != nil {
+	// Special handling for auto-increment IDs
+	var entityID string = rawID
+	if def.IDGenerator == common.IDTypeAutoIncrement {
+		// IMPORTANT: For auto-increment, we need to make sure we're using
+		// exactly the same string format as when it was stored
+		// Try multiple formats to find the entity
+		formats := []string{rawID}
+
+		// Only try conversion if it's a valid number
+		if _, err := strconv.Atoi(rawID); err == nil {
+			// Try multiple formatting approaches
+			id, _ := strconv.ParseUint(rawID, 10, 64)
+			formats = append(formats, strconv.FormatUint(id, 10))
+
+			id2, _ := strconv.ParseInt(rawID, 10, 64)
+			formats = append(formats, strconv.FormatInt(id2, 10))
+
+			intID, _ := strconv.Atoi(rawID)
+			formats = append(formats, strconv.Itoa(intID))
+		}
+
+		// Try each format until we find the entity
+		entityFound := false
+		for _, fmt := range formats {
+			// Try to get the entity with this format
+			if _, err := s.engine.Get(fmt); err == nil {
+				// Found it! Use this format for deletion
+				entityID = fmt
+				entityFound = true
+				break
+			}
+		}
+
+		if !entityFound {
+			// If no format worked, use the direct approach - check the debug endpoint for clues
+			engine, ok := s.engine.(*datastore.Engine)
+			if ok {
+				engine.DebugInspectEntities(func(entities map[string]common.Entity) {
+					// Look for an entity with matching ID and type
+					for key, entity := range entities {
+						if entity.Type == entityType && entity.ID == rawID {
+							entityID = key
+							entityFound = true
+							break
+						}
+					}
+				})
+			}
+
+			if !entityFound {
+				s.respondWithError(w, http.StatusNotFound, "Entity not found with any ID format")
+				return
+			}
+		}
+	}
+
+	// At this point, we should have the right entityID format
+	if s.config.DebugMode {
+		s.logger.WithFields(logrus.Fields{
+			"entityType": entityType,
+			"rawID":      rawID,
+			"entityID":   entityID,
+		}).Debug("Deleting entity")
+	}
+
+	// Use the properly formatted entity ID for deletion
+	if err := s.engine.Delete(entityID); err != nil {
 		s.respondWithError(w, http.StatusBadRequest, err.Error())
 		return
 	}
