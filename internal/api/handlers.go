@@ -2,9 +2,9 @@ package api
 
 import (
 	"encoding/json"
+	"github.com/phillarmonic/syncopate-db/internal/settings"
 	"net/http"
 	"os"
-	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -22,6 +22,24 @@ type WelcomeResponse struct {
 	HealthCheck   string `json:"healthCheck"`
 	Status        string `json:"status"`
 	ServerTime    string `json:"serverTime"`
+}
+
+// handleSettings returns the current configuration settings
+func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
+	// Create a settings view that's safe to expose
+	settingsView := map[string]interface{}{
+		"debug":         settings.Config.Debug,
+		"logLevel":      settings.Config.LogLevel,
+		"port":          settings.Config.Port,
+		"enableWAL":     settings.Config.EnableWAL,
+		"enableZSTD":    settings.Config.EnableZSTD,
+		"colorizedLogs": settings.Config.ColorizedLogs,
+		"serverTime":    time.Now().Format(time.RFC3339),
+		"version":       "0.0.1", // This should be sourced from the about package
+		"environment":   determineEnvironment(),
+	}
+
+	s.respondWithJSON(w, http.StatusOK, settingsView, true)
 }
 
 // handleWelcome provides a welcome message for the root path
@@ -117,17 +135,46 @@ func (s *Server) handleListEntities(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Filter internal fields from response data
-	filteredData := make([]common.Entity, len(response.Data))
-	for i, entity := range response.Data {
-		filteredData[i] = s.filterInternalFields(entity)
+	// Get the entity definition to determine ID type
+	def, err := s.engine.GetEntityDefinition(entityType)
+	if err != nil {
+		s.respondWithError(w, http.StatusBadRequest, err.Error())
+		return
 	}
-	response.Data = filteredData
 
-	s.respondWithJSON(w, http.StatusOK, response)
+	// Filter internal fields from response data and convert IDs
+	filteredData := make([]interface{}, len(response.Data))
+	for i, entity := range response.Data {
+		// Filter internal fields first
+		filteredEntity := s.filterInternalFields(entity)
+		// Then convert to representation with proper ID type
+		filteredData[i] = common.ConvertToRepresentation(filteredEntity, def.IDGenerator)
+	}
+
+	// Create a new response with the filtered and converted data
+	convertedResponse := struct {
+		Data       []interface{} `json:"data"`
+		Total      int           `json:"total"`
+		Count      int           `json:"count"`
+		Limit      int           `json:"limit"`
+		Offset     int           `json:"offset"`
+		HasMore    bool          `json:"hasMore"`
+		EntityType string        `json:"entityType"`
+	}{
+		Data:       filteredData,
+		Total:      response.Total,
+		Count:      response.Count,
+		Limit:      response.Limit,
+		Offset:     response.Offset,
+		HasMore:    response.HasMore,
+		EntityType: response.EntityType,
+	}
+
+	s.respondWithJSON(w, http.StatusOK, convertedResponse)
 }
 
 // handleCreateEntity creates a new entity
+// Todo user should not be able to point an ID on auto increment on create/update
 func (s *Server) handleCreateEntity(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	entityType := vars["type"]
@@ -156,18 +203,20 @@ func (s *Server) handleCreateEntity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Insert the entity - ID will be generated if not provided based on the entity type's generator
-	if err := s.engine.Insert(entityType, entityData.ID, entityData.Fields); err != nil {
+	// Convert ID to string if provided as a number for auto_increment
+	// (This is a defensive measure in case the client sends a numeric ID)
+	rawID := entityData.ID
+
+	// Insert the entity - ID will be generated if not provided
+	if err := s.engine.Insert(entityType, rawID, entityData.Fields); err != nil {
 		s.respondWithError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	// For consistency with the original handler, get the entity to retrieve its ID
-	// In a real implementation, we might want to modify Insert to return the generated ID
-	var entityID string
-	if entityData.ID != "" {
-		entityID = entityData.ID
-	} else {
+	// For auto-generated IDs, we need to find the ID that was generated
+	var responseID interface{}
+
+	if rawID == "" {
 		// We need to find the entity that was just inserted
 		// This is a bit inefficient, but it works for the response
 		// A better approach would be to modify Insert to return the generated ID
@@ -177,43 +226,78 @@ func (s *Server) handleCreateEntity(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Find the most recently inserted entity
-		// This is a heuristic and not 100% reliable in a concurrent environment
-		// Again, a better approach would be to modify Insert to return the generated ID
+		// Find the most recently inserted entity by looking at _created_at timestamp
+		var newestEntity common.Entity
+		var newestTime time.Time
+
 		for _, e := range entities {
-			if reflect.DeepEqual(e.Fields, entityData.Fields) {
-				entityID = e.ID
-				break
+			if createdAt, ok := e.Fields["_created_at"].(time.Time); ok {
+				if newestEntity.ID == "" || createdAt.After(newestTime) {
+					newestEntity = e
+					newestTime = createdAt
+				}
 			}
+		}
+
+		if newestEntity.ID != "" {
+			rawID = newestEntity.ID
 		}
 	}
 
-	s.respondWithJSON(w, http.StatusCreated, map[string]string{
+	// Format the response ID based on entity type's ID generator
+	responseID = rawID
+
+	// For auto_increment, convert ID to int for the response
+	if def.IDGenerator == common.IDTypeAutoIncrement {
+		if id, err := strconv.Atoi(rawID); err == nil {
+			responseID = id
+		}
+	}
+
+	s.respondWithJSON(w, http.StatusCreated, map[string]interface{}{
 		"message": "Entity created successfully",
-		"id":      entityID,
+		"id":      responseID,
 	})
 }
 
 // handleGetEntity retrieves a specific entity
 func (s *Server) handleGetEntity(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
-	id := vars["id"]
+	rawID := vars["id"]
+	entityType := vars["type"]
 
-	entity, err := s.engine.Get(id)
+	// Get the entity definition to determine ID type
+	_, err := s.engine.GetEntityDefinition(entityType)
+	if err != nil {
+		s.respondWithError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// For auto_increment types, the ID is always stored as a string internally
+	// We don't need to convert anything for the lookup
+	entity, err := s.engine.Get(rawID)
 	if err != nil {
 		s.respondWithError(w, http.StatusNotFound, err.Error())
 		return
 	}
 
-	// Filter out internal fields before sending response
-	filteredEntity := s.filterInternalFields(entity)
+	// Filter out internal fields and convert ID to appropriate type for response
+	filteredEntity := s.filterInternalFieldsWithIDConversion(entity)
 	s.respondWithJSON(w, http.StatusOK, filteredEntity)
 }
 
 // handleUpdateEntity updates a specific entity
 func (s *Server) handleUpdateEntity(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
-	id := vars["id"]
+	rawID := vars["id"]
+	entityType := vars["type"]
+
+	// Get entity definition to determine ID type
+	def, err := s.engine.GetEntityDefinition(entityType)
+	if err != nil {
+		s.respondWithError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	var updateData struct {
 		Fields map[string]interface{} `json:"fields"`
@@ -225,30 +309,60 @@ func (s *Server) handleUpdateEntity(w http.ResponseWriter, r *http.Request) {
 	}
 	defer r.Body.Close()
 
-	if err := s.engine.Update(id, updateData.Fields); err != nil {
+	// Always use the raw string ID for internal operations
+	if err := s.engine.Update(rawID, updateData.Fields); err != nil {
 		s.respondWithError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	s.respondWithJSON(w, http.StatusOK, map[string]string{
+	// Format the response ID based on entity type's ID generator
+	var responseID interface{} = rawID
+
+	// If it's an auto_increment type, convert to int for API response
+	if def.IDGenerator == common.IDTypeAutoIncrement {
+		if intID, err := strconv.Atoi(rawID); err == nil {
+			responseID = intID
+		}
+	}
+
+	s.respondWithJSON(w, http.StatusOK, map[string]interface{}{
 		"message": "Entity updated successfully",
-		"id":      id,
+		"id":      responseID,
 	})
 }
 
 // handleDeleteEntity deletes a specific entity
 func (s *Server) handleDeleteEntity(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
-	id := vars["id"]
+	rawID := vars["id"]
+	entityType := vars["type"]
 
-	if err := s.engine.Delete(id); err != nil {
+	// Get entity definition to determine ID type
+	def, err := s.engine.GetEntityDefinition(entityType)
+	if err != nil {
 		s.respondWithError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	s.respondWithJSON(w, http.StatusOK, map[string]string{
+	// Always use the raw string ID for internal operations
+	if err := s.engine.Delete(rawID); err != nil {
+		s.respondWithError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Format the response ID based on entity type's ID generator
+	var responseID interface{} = rawID
+
+	// If it's an auto_increment type, convert to int for API response
+	if def.IDGenerator == common.IDTypeAutoIncrement {
+		if intID, err := strconv.Atoi(rawID); err == nil {
+			responseID = intID
+		}
+	}
+
+	s.respondWithJSON(w, http.StatusOK, map[string]interface{}{
 		"message": "Entity deleted successfully",
-		"id":      id,
+		"id":      responseID,
 	})
 }
 
@@ -267,14 +381,42 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Filter internal fields from response data
-	filteredData := make([]common.Entity, len(response.Data))
-	for i, entity := range response.Data {
-		filteredData[i] = s.filterInternalFields(entity)
+	// Get the entity definition to determine ID type
+	def, err := s.engine.GetEntityDefinition(queryOpts.EntityType)
+	if err != nil {
+		s.respondWithError(w, http.StatusBadRequest, err.Error())
+		return
 	}
-	response.Data = filteredData
 
-	s.respondWithJSON(w, http.StatusOK, response)
+	// Filter internal fields from response data and convert IDs
+	filteredData := make([]interface{}, len(response.Data))
+	for i, entity := range response.Data {
+		// Filter internal fields first
+		filteredEntity := s.filterInternalFields(entity)
+		// Then convert to representation with proper ID type
+		filteredData[i] = common.ConvertToRepresentation(filteredEntity, def.IDGenerator)
+	}
+
+	// Create a new response with the filtered and converted data
+	convertedResponse := struct {
+		Data       []interface{} `json:"data"`
+		Total      int           `json:"total"`
+		Count      int           `json:"count"`
+		Limit      int           `json:"limit"`
+		Offset     int           `json:"offset"`
+		HasMore    bool          `json:"hasMore"`
+		EntityType string        `json:"entityType"`
+	}{
+		Data:       filteredData,
+		Total:      response.Total,
+		Count:      response.Count,
+		Limit:      response.Limit,
+		Offset:     response.Offset,
+		HasMore:    response.HasMore,
+		EntityType: response.EntityType,
+	}
+
+	s.respondWithJSON(w, http.StatusOK, convertedResponse)
 }
 
 // parseQueryParams extracts common query parameters
@@ -332,4 +474,41 @@ func (s *Server) filterInternalFields(entity common.Entity) common.Entity {
 	}
 
 	return filteredEntity
+}
+
+// filterInternalFieldsWithIDConversion removes internal fields from entity data
+// and converts the ID to the appropriate type based on the entity's ID generator
+func (s *Server) filterInternalFieldsWithIDConversion(entity common.Entity) interface{} {
+	// Get entity definition to check the ID generator type
+	def, err := s.engine.GetEntityDefinition(entity.Type)
+	if err != nil {
+		// If we can't get the definition, use string ID (fallback)
+		return s.filterInternalFields(entity)
+	}
+
+	// Filter out internal fields
+	filteredEntity := s.filterInternalFields(entity)
+
+	// Convert to representation with proper ID type
+	return common.ConvertToRepresentation(filteredEntity, def.IDGenerator)
+}
+
+// determineEnvironment tries to detect the current deployment environment
+func determineEnvironment() string {
+	// Check for common environment variables
+	if env := os.Getenv("APP_ENV"); env != "" {
+		return env
+	}
+
+	if env := os.Getenv("ENV"); env != "" {
+		return env
+	}
+
+	// Check for debug mode
+	if settings.Config.Debug {
+		return "development"
+	}
+
+	// Default to production
+	return "production"
 }

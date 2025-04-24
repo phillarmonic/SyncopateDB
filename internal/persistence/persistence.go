@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/gob"
 	"fmt"
+	"github.com/phillarmonic/syncopate-db/internal/settings"
 	"io"
 	"os"
 	"path/filepath"
@@ -48,6 +49,7 @@ type Engine struct {
 	snapshotInterval time.Duration
 	stopSnapshot     chan struct{}
 	snapshotTicker   *time.Ticker
+	useCompression   bool // Flag to indicate if compression is enabled
 }
 
 // Config holds configuration for the persistence engine
@@ -60,6 +62,7 @@ type Config struct {
 	EncryptionKey    []byte
 	EnableAutoGC     bool
 	GCInterval       time.Duration
+	UseCompression   bool
 }
 
 func init() {
@@ -80,12 +83,13 @@ func DefaultConfig() Config {
 		Logger:           logrus.New(),
 		EnableAutoGC:     true,
 		GCInterval:       5 * time.Minute,
+		UseCompression:   settings.Config.EnableZSTD, // Get from settings
 	}
 }
 
 // NewPersistenceEngine creates a new persistence engine
 func NewPersistenceEngine(config Config) (*Engine, error) {
-	// Create data directory if it doesn't exist
+	// Create a data directory if it doesn't exist
 	if err := os.MkdirAll(config.Path, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create data directory: %w", err)
 	}
@@ -99,7 +103,6 @@ func NewPersistenceEngine(config Config) (*Engine, error) {
 	if len(config.EncryptionKey) > 0 {
 		badgerOpts = badgerOpts.
 			WithEncryptionKey(config.EncryptionKey)
-		// Note: WithIndexCache was removed in Badger v4
 	}
 
 	db, err := badger.Open(badgerOpts)
@@ -108,18 +111,28 @@ func NewPersistenceEngine(config Config) (*Engine, error) {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 
-	// Initialize zstd compressor and decompressor
-	compressor, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedDefault))
-	if err != nil {
-		db.Close()
-		return nil, fmt.Errorf("failed to create compressor: %w", err)
-	}
+	// Initialize zstd compressor and decompressor if enabled in settings
+	var compressor *zstd.Encoder
+	var decompressor *zstd.Decoder
 
-	decompressor, err := zstd.NewReader(nil)
-	if err != nil {
-		db.Close()
-		compressor.Close()
-		return nil, fmt.Errorf("failed to create decompressor: %w", err)
+	// Check if ZSTD compression is enabled in settings
+	useCompression := settings.Config.EnableZSTD
+
+	if useCompression {
+		compressor, err = zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedDefault))
+		if err != nil {
+			db.Close()
+			return nil, fmt.Errorf("failed to create compressor: %w", err)
+		}
+
+		decompressor, err = zstd.NewReader(nil)
+		if err != nil {
+			db.Close()
+			if compressor != nil {
+				compressor.Close()
+			}
+			return nil, fmt.Errorf("failed to create decompressor: %w", err)
+		}
 	}
 
 	engine := &Engine{
@@ -132,6 +145,7 @@ func NewPersistenceEngine(config Config) (*Engine, error) {
 		syncWAL:          config.SyncWrites,
 		snapshotInterval: config.SnapshotInterval,
 		stopSnapshot:     make(chan struct{}),
+		useCompression:   useCompression,
 	}
 
 	// Start snapshot routine
@@ -165,23 +179,38 @@ func (pe *Engine) Close() error {
 	pe.mu.Unlock()
 
 	// Close resources without holding the lock
-	compressor.Close()
-	decompressor.Close()
+	if compressor != nil {
+		compressor.Close()
+	}
+	if decompressor != nil {
+		decompressor.Close()
+	}
 	return db.Close()
 }
 
-// Compress compresses data using zstd
+// Compress compresses data using zstd if enabled, otherwise returns the original data
 func (pe *Engine) Compress(data []byte) []byte {
+	if !pe.useCompression || pe.compressor == nil {
+		return data // Return uncompressed data if compression is disabled
+	}
 	return pe.compressor.EncodeAll(data, nil)
 }
 
-// Decompress decompresses data using zstd
+// Decompress decompresses data using zstd if compression is enabled
 func (pe *Engine) Decompress(data []byte) ([]byte, error) {
+	if !pe.useCompression || pe.decompressor == nil {
+		return data, nil // Return the data as-is if compression is disabled
+	}
 	return pe.decompressor.DecodeAll(data, nil)
 }
 
 // WriteWALEntry writes an operation to the write-ahead log
 func (pe *Engine) WriteWALEntry(op int, entityType, entityID string, data []byte) error {
+	// Check if WAL is disabled in settings
+	if !settings.Config.EnableWAL {
+		return nil // Skip WAL if disabled
+	}
+
 	// Create WAL entry outside of the lock
 	entry := WALEntry{
 		Timestamp:  time.Now().UnixNano(),
@@ -478,6 +507,22 @@ func (pe *Engine) startSnapshotRoutine() {
 
 // RegisterEntityType registers a new entity type and persists the definition
 func (pe *Engine) RegisterEntityType(store common.DatastoreEngine, def common.EntityDefinition) error {
+	// Check if WAL is disabled in settings
+	if !settings.Config.EnableWAL {
+		// Even without WAL, we still need to register the definition
+		// in the database for future use
+		var buf bytes.Buffer
+		if err := gob.NewEncoder(&buf).Encode(def); err != nil {
+			return fmt.Errorf("failed to encode entity definition: %w", err)
+		}
+
+		// Create a direct entry for the entity definition
+		key := fmt.Sprintf("entitydef:%s", def.Name)
+		return pe.db.Update(func(txn *badger.Txn) error {
+			return txn.Set([]byte(key), pe.Compress(buf.Bytes()))
+		})
+	}
+
 	// Serialize the entity definition outside of any locks
 	var buf bytes.Buffer
 	if err := gob.NewEncoder(&buf).Encode(def); err != nil {
@@ -494,6 +539,14 @@ func (pe *Engine) Insert(store common.DatastoreEngine, entityType, entityID stri
 	var buf bytes.Buffer
 	if err := gob.NewEncoder(&buf).Encode(data); err != nil {
 		return fmt.Errorf("failed to encode entity data: %w", err)
+	}
+
+	// If WAL is disabled, write directly to the database
+	if !settings.Config.EnableWAL {
+		key := fmt.Sprintf("entity:%s:%s", entityType, entityID)
+		return pe.db.Update(func(txn *badger.Txn) error {
+			return txn.Set([]byte(key), pe.Compress(buf.Bytes()))
+		})
 	}
 
 	// Write to WAL
@@ -514,6 +567,14 @@ func (pe *Engine) Update(store common.DatastoreEngine, entityID string, data map
 		return fmt.Errorf("failed to encode entity data: %w", err)
 	}
 
+	// If WAL is disabled, update directly in the database
+	if !settings.Config.EnableWAL {
+		key := fmt.Sprintf("entity:%s:%s", entity.Type, entityID)
+		return pe.db.Update(func(txn *badger.Txn) error {
+			return txn.Set([]byte(key), pe.Compress(buf.Bytes()))
+		})
+	}
+
 	// Write to WAL
 	return pe.WriteWALEntry(OpUpdateEntity, entity.Type, entityID, buf.Bytes())
 }
@@ -524,6 +585,14 @@ func (pe *Engine) Delete(store common.DatastoreEngine, entityID string) error {
 	entity, err := store.Get(entityID)
 	if err != nil {
 		return err
+	}
+
+	// If WAL is disabled, delete it directly from the database
+	if !settings.Config.EnableWAL {
+		key := fmt.Sprintf("entity:%s:%s", entity.Type, entityID)
+		return pe.db.Update(func(txn *badger.Txn) error {
+			return txn.Delete([]byte(key))
+		})
 	}
 
 	// Write to WAL

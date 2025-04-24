@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"github.com/phillarmonic/syncopate-db/internal/settings"
 	"net/http"
 	"os"
 	"os/signal"
@@ -19,27 +20,34 @@ import (
 
 // ServerConfig holds configuration for the REST API server
 type ServerConfig struct {
-	Port         int
-	ReadTimeout  time.Duration
-	WriteTimeout time.Duration
-	IdleTimeout  time.Duration
-	LogLevel     logrus.Level
-	RateLimit    int           // Requests per minute per IP
-	RateWindow   time.Duration // Rate limit window (usually 1 minute)
-	DebugMode    bool          // Flag to enable debug mode (disables goroutines)
+	Port          int
+	ReadTimeout   time.Duration
+	WriteTimeout  time.Duration
+	IdleTimeout   time.Duration
+	LogLevel      logrus.Level
+	RateLimit     int           // Requests per minute per IP
+	RateWindow    time.Duration // Rate limit window (usually 1 minute)
+	DebugMode     bool          // Flag to enable debug mode (disables goroutines)
+	ColorizedLogs bool          // Flag to enable colorized log output
 }
 
 // DefaultServerConfig returns a default server configuration
 func DefaultServerConfig() ServerConfig {
+	logLevel, err := logrus.ParseLevel(string(settings.Config.LogLevel))
+	if err != nil {
+		logLevel = logrus.InfoLevel
+	}
+
 	return ServerConfig{
-		Port:         8080,
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
-		IdleTimeout:  60 * time.Second,
-		LogLevel:     logrus.InfoLevel,
-		RateLimit:    100,         // 100 requests per minute per IP
-		RateWindow:   time.Minute, // 1 minute window
-		DebugMode:    false,       // Debug mode disabled by default
+		Port:          settings.Config.Port,
+		ReadTimeout:   15 * time.Second,
+		WriteTimeout:  15 * time.Second,
+		IdleTimeout:   60 * time.Second,
+		LogLevel:      logLevel,
+		RateLimit:     100,                           // 100 requests per minute per IP
+		RateWindow:    time.Minute,                   // 1 minute window
+		DebugMode:     settings.Config.Debug,         // Debug mode from settings
+		ColorizedLogs: settings.Config.ColorizedLogs, // Colorized logs from settings
 	}
 }
 
@@ -78,6 +86,7 @@ func NewServer(engine common.DatastoreEngine, queryService *datastore.QueryServi
 func (s *Server) setupRoutes() {
 	// Root path - SyncopateDB welcome
 	s.router.HandleFunc("/", s.handleWelcome).Methods(http.MethodGet)
+	s.router.HandleFunc("/settings", s.handleSettings).Methods(http.MethodGet)
 
 	// API version prefix
 	api := s.router.PathPrefix("/api/v1").Subrouter()

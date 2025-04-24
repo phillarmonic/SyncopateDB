@@ -1,6 +1,9 @@
 package common
 
-import "errors"
+import (
+	"errors"
+	"strconv"
+)
 
 // PersistenceProvider defines the interface for storage backends
 type PersistenceProvider interface {
@@ -100,3 +103,35 @@ var ErrInvalidID = errors.New("invalid ID format")
 
 // ErrIDGenerationFailed is returned when ID generation fails
 var ErrIDGenerationFailed = errors.New("failed to generate ID")
+
+// EntityRepresentation represents an entity with appropriate ID type for API responses
+type EntityRepresentation struct {
+	ID     interface{}            `json:"id"` // Can be either string or int
+	Type   string                 `json:"type"`
+	Fields map[string]interface{} `json:"fields"`
+}
+
+// ConvertToRepresentation converts an Entity to an EntityRepresentation
+// where ID is converted to the appropriate type based on the entity type's ID generator
+func ConvertToRepresentation(entity Entity, idGeneratorType IDGenerationType) EntityRepresentation {
+	representation := EntityRepresentation{
+		Type:   entity.Type,
+		Fields: entity.Fields,
+	}
+
+	// Convert ID to int for auto_increment entities
+	if idGeneratorType == IDTypeAutoIncrement {
+		// Try to convert ID to int
+		if id, err := strconv.Atoi(entity.ID); err == nil {
+			representation.ID = id
+		} else {
+			// Fallback to string if conversion fails
+			representation.ID = entity.ID
+		}
+	} else {
+		// For other ID types, keep as string
+		representation.ID = entity.ID
+	}
+
+	return representation
+}

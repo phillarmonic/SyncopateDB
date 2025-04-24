@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/phillarmonic/syncopate-db/internal/common"
+	"github.com/phillarmonic/syncopate-db/internal/settings"
 	"github.com/sirupsen/logrus"
 )
 
@@ -20,6 +21,15 @@ type Manager struct {
 
 // NewManager creates a new persistence manager
 func NewManager(config Config) (*Manager, error) {
+	// Apply settings from the settings package
+	if config.Logger != nil {
+		config.Logger.Infof("Using settings from config: WAL=%v, ZSTD=%v",
+			settings.Config.EnableWAL, settings.Config.EnableZSTD)
+	}
+
+	// Update config with settings
+	config.UseCompression = settings.Config.EnableZSTD
+
 	// Initialize persistence engine
 	persistenceEngine, err := NewPersistenceEngine(config)
 	if err != nil {
@@ -34,7 +44,7 @@ func NewManager(config Config) (*Manager, error) {
 	}
 
 	// Start automatic garbage collection if enabled
-	if config.EnableAutoGC {
+	if config.EnableAutoGC && !settings.Config.Debug {
 		manager.StartGarbageCollection(config.GCInterval)
 	}
 
@@ -89,6 +99,12 @@ func (m *Manager) RunValueLogGC(discardRatio float64) error {
 
 // StartGarbageCollection starts periodic garbage collection
 func (m *Manager) StartGarbageCollection(interval time.Duration) {
+	// Skip if debug mode is enabled
+	if settings.Config.Debug {
+		m.logger.Info("Skipping automatic garbage collection in debug mode")
+		return
+	}
+
 	// If already running, stop it first
 	if m.gcTicker != nil {
 		m.StopGarbageCollection()
@@ -165,6 +181,12 @@ func (m *Manager) GetStorageStats() map[string]interface{} {
 
 	stats := map[string]interface{}{
 		"entity_types_count": len(engine.ListEntityTypes()),
+		"settings": map[string]interface{}{
+			"debug":       settings.Config.Debug,
+			"enable_wal":  settings.Config.EnableWAL,
+			"enable_zstd": settings.Config.EnableZSTD,
+			"log_level":   settings.Config.LogLevel,
+		},
 	}
 
 	// Add entity counts by type
