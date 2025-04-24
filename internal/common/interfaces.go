@@ -46,9 +46,14 @@ type DatastoreEngine interface {
 	GetEntityCount(entityType string) (int, error)
 	GetAllEntitiesOfType(entityType string) ([]Entity, error)
 
-	// New methods for ID generation
+	// Methods for ID generation
 	SetAutoIncrementCounter(entityType string, counter uint64) error
 	GetAutoIncrementCounter(entityType string) (uint64, error)
+
+	// New methods for deleted IDs management
+	MarkIDAsDeleted(entityType string, id string) error
+	GetDeletedIDs(entityType string) (map[string]bool, error)
+	LoadDeletedIDs(entityType string, deletedIDs map[string]bool) error
 }
 
 // Entity represents a concrete instance with data
@@ -134,4 +139,14 @@ func ConvertToRepresentation(entity Entity, idGeneratorType IDGenerationType) En
 	}
 
 	return representation
+}
+
+// PersistenceWithDeletedIDs extends PersistenceProvider with deleted ID operations
+// for auto-increment ID generators
+type PersistenceWithDeletedIDs interface {
+	PersistenceProvider
+
+	// DeletedIDs operations
+	LoadDeletedIDs(store DatastoreEngine) error
+	SaveDeletedIDs(entityType string, deletedIDs map[string]bool) error
 }

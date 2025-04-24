@@ -54,15 +54,25 @@ func NewDataStoreEngine(config ...EngineConfig) *Engine {
 				fmt.Printf("Error loading WAL: %v\n", err)
 			}
 
-			// Load auto-increment counters (new addition)
+			// Load auto-increment counters
 			if persistenceWithCounters, ok := engine.persistence.(common.PersistenceWithCounters); ok {
 				if err := persistenceWithCounters.LoadCounters(engine); err != nil {
 					// Log error but continue
 					fmt.Printf("Error loading auto-increment counters: %v\n", err)
 				}
 			}
+
+			// Load deleted IDs for auto-increment generators
+			if persistenceWithDeletedIDs, ok := engine.persistence.(common.PersistenceWithDeletedIDs); ok {
+				if err := persistenceWithDeletedIDs.LoadDeletedIDs(engine); err != nil {
+					// Log error but continue
+					fmt.Printf("Error loading deleted IDs: %v\n", err)
+				}
+			}
 		}
 	}
+
+	engine.EnsureAutoIncrementCounterAboveExistingIDs()
 
 	return engine
 }
@@ -427,6 +437,29 @@ func (dse *Engine) Delete(id string) error {
 
 	dse.mu.RUnlock()
 
+	// Get entity definition to determine ID type
+	idGeneratorType, err := dse.GetIDGeneratorType(entityType)
+	if err == nil && idGeneratorType == common.IDTypeAutoIncrement {
+		// For auto-increment, mark this ID as deleted to prevent reuse
+		generator, err := dse.idGeneratorMgr.GetGenerator(entityType)
+		if err == nil {
+			if autoGen, ok := generator.(*AutoIncrementGenerator); ok {
+				autoGen.MarkIDDeleted(entityType, id)
+
+				// Save the updated deleted IDs list if persistence is enabled
+				if dse.persistence != nil {
+					if persistenceWithDeletedIDs, ok := dse.persistence.(common.PersistenceWithDeletedIDs); ok {
+						deletedIDs := autoGen.SaveDeletedIDs(entityType)
+						if err := persistenceWithDeletedIDs.SaveDeletedIDs(entityType, deletedIDs); err != nil {
+							// Just log the error, don't fail the delete
+							fmt.Printf("Error saving deleted IDs: %v\n", err)
+						}
+					}
+				}
+			}
+		}
+	}
+
 	// Now acquire write lock for the deletion
 	dse.mu.Lock()
 
@@ -636,4 +669,66 @@ func (dse *Engine) DebugInspectEntities(inspector func(map[string]common.Entity)
 	}
 
 	inspector(entitiesCopy)
+}
+
+// MarkIDAsDeleted marks an ID as deleted so it won't be reused
+func (dse *Engine) MarkIDAsDeleted(entityType string, id string) error {
+	generator, err := dse.idGeneratorMgr.GetGenerator(entityType)
+	if err != nil {
+		return err
+	}
+
+	// Only apply to auto-increment generators
+	if generator.Type() != common.IDTypeAutoIncrement {
+		return nil
+	}
+
+	autoGen, ok := generator.(*AutoIncrementGenerator)
+	if !ok {
+		return fmt.Errorf("expected AutoIncrementGenerator, got %T", generator)
+	}
+
+	autoGen.MarkIDDeleted(entityType, id)
+	return nil
+}
+
+// GetDeletedIDs gets the set of deleted IDs for an entity type
+func (dse *Engine) GetDeletedIDs(entityType string) (map[string]bool, error) {
+	generator, err := dse.idGeneratorMgr.GetGenerator(entityType)
+	if err != nil {
+		return nil, err
+	}
+
+	// Only apply to auto-increment generators
+	if generator.Type() != common.IDTypeAutoIncrement {
+		return make(map[string]bool), nil
+	}
+
+	autoGen, ok := generator.(*AutoIncrementGenerator)
+	if !ok {
+		return nil, fmt.Errorf("expected AutoIncrementGenerator, got %T", generator)
+	}
+
+	return autoGen.SaveDeletedIDs(entityType), nil
+}
+
+// LoadDeletedIDs loads a set of deleted IDs for an entity type
+func (dse *Engine) LoadDeletedIDs(entityType string, deletedIDs map[string]bool) error {
+	generator, err := dse.idGeneratorMgr.GetGenerator(entityType)
+	if err != nil {
+		return err
+	}
+
+	// Only apply to auto-increment generators
+	if generator.Type() != common.IDTypeAutoIncrement {
+		return nil
+	}
+
+	autoGen, ok := generator.(*AutoIncrementGenerator)
+	if !ok {
+		return fmt.Errorf("expected AutoIncrementGenerator, got %T", generator)
+	}
+
+	autoGen.LoadDeletedIDs(entityType, deletedIDs)
+	return nil
 }

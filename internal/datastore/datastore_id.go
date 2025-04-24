@@ -15,14 +15,16 @@ import (
 
 // AutoIncrementGenerator generates auto-incrementing IDs
 type AutoIncrementGenerator struct {
-	counters map[string]*uint64
-	mu       sync.RWMutex
+	counters   map[string]*uint64
+	deletedIDs map[string]map[string]bool // Map of entity types to sets of deleted IDs
+	mu         sync.RWMutex
 }
 
 // NewAutoIncrementGenerator creates a new auto-increment ID generator
 func NewAutoIncrementGenerator() *AutoIncrementGenerator {
 	return &AutoIncrementGenerator{
-		counters: make(map[string]*uint64),
+		counters:   make(map[string]*uint64),
+		deletedIDs: make(map[string]map[string]bool),
 	}
 }
 
@@ -40,13 +42,45 @@ func (g *AutoIncrementGenerator) GenerateID(entityType string) (string, error) {
 			var initialValue uint64 = 0
 			counter = &initialValue
 			g.counters[entityType] = counter
+			// Initialize the deleted IDs map for this entity type
+			g.deletedIDs[entityType] = make(map[string]bool)
 		}
 		g.mu.Unlock()
 	}
 
-	// Atomically increment the counter
-	newID := atomic.AddUint64(counter, 1)
-	return strconv.FormatUint(newID, 10), nil
+	// Generate a new ID by incrementing the counter
+	for {
+		// Atomically increment the counter
+		newID := atomic.AddUint64(counter, 1)
+		idStr := strconv.FormatUint(newID, 10)
+
+		// Check if this ID has been marked as deleted
+		g.mu.RLock()
+		isDeleted, exists := g.deletedIDs[entityType][idStr]
+		g.mu.RUnlock()
+
+		if !exists || !isDeleted {
+			// This ID is available (either never used or not deleted)
+			return idStr, nil
+		}
+
+		// If we got here, the ID was previously deleted
+		// We don't want to reuse it, so we'll try again with the next ID
+	}
+}
+
+// MarkIDDeleted adds an ID to the set of deleted IDs
+func (g *AutoIncrementGenerator) MarkIDDeleted(entityType string, id string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	// Initialize the map for this entity type if it doesn't exist
+	if _, exists := g.deletedIDs[entityType]; !exists {
+		g.deletedIDs[entityType] = make(map[string]bool)
+	}
+
+	// Mark this ID as deleted
+	g.deletedIDs[entityType][id] = true
 }
 
 // ValidateID validates if an ID is a valid auto-increment ID
@@ -269,11 +303,11 @@ func (dse *Engine) SetAutoIncrementCounter(entityType string, counter uint64) er
 		return fmt.Errorf("expected AutoIncrementGenerator, got %T", generator)
 	}
 
-	// Set the counter - we need to add this method to AutoIncrementGenerator
+	// Set the counter
 	return autoGen.SetCounter(entityType, counter)
 }
 
-// SetCounter sets the counter value for an entity type
+// SetCounter sets the counter-value for an entity type
 func (g *AutoIncrementGenerator) SetCounter(entityType string, value uint64) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -282,10 +316,15 @@ func (g *AutoIncrementGenerator) SetCounter(entityType string, value uint64) err
 	if !exists {
 		var newCounter uint64 = value
 		g.counters[entityType] = &newCounter
+
+		// Initialize the deleted IDs map for this entity type
+		if _, exists := g.deletedIDs[entityType]; !exists {
+			g.deletedIDs[entityType] = make(map[string]bool)
+		}
 		return nil
 	}
 
-	// Only set if the new value is higher than the current one
+	// ONLY set if the new value is higher than the current one
 	// This ensures we never reuse IDs
 	currentValue := atomic.LoadUint64(counter)
 	if value > currentValue {
@@ -341,4 +380,80 @@ func (dse *Engine) GetIDGeneratorType(entityType string) (common.IDGenerationTyp
 	}
 
 	return def.IDGenerator, nil
+}
+
+// SaveDeletedIDs serializes the deleted IDs for persistence
+func (g *AutoIncrementGenerator) SaveDeletedIDs(entityType string) map[string]bool {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+
+	if deletedMap, exists := g.deletedIDs[entityType]; exists {
+		// Create a copy of the map to avoid concurrent access issues
+		result := make(map[string]bool)
+		for id, val := range deletedMap {
+			result[id] = val
+		}
+		return result
+	}
+
+	return make(map[string]bool)
+}
+
+// LoadDeletedIDs loads deleted IDs from persistence
+func (g *AutoIncrementGenerator) LoadDeletedIDs(entityType string, deletedIDs map[string]bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	// Initialize if it doesn't exist
+	if _, exists := g.deletedIDs[entityType]; !exists {
+		g.deletedIDs[entityType] = make(map[string]bool)
+	}
+
+	// Add all provided deleted IDs
+	for id, val := range deletedIDs {
+		if val {
+			g.deletedIDs[entityType][id] = true
+		}
+	}
+}
+
+// EnsureAutoIncrementCounterAboveExistingIDs ensures the auto-increment counter is higher than all existing IDs
+func (dse *Engine) EnsureAutoIncrementCounterAboveExistingIDs() error {
+	// First, get all entity types
+	entityTypes := dse.ListEntityTypes()
+
+	for _, entityType := range entityTypes {
+		// Check if this entity type uses auto-increment
+		def, err := dse.GetEntityDefinition(entityType)
+		if err != nil {
+			continue // Skip if we can't get the definition
+		}
+
+		if def.IDGenerator != common.IDTypeAutoIncrement {
+			continue // Skip if not using auto-increment
+		}
+
+		// Get all entities of this type
+		entities, err := dse.GetAllEntitiesOfType(entityType)
+		if err != nil {
+			continue // Skip if we can't get entities
+		}
+
+		// Find the highest ID
+		var highestID uint64 = 0
+		for _, entity := range entities {
+			if id, err := strconv.ParseUint(entity.ID, 10, 64); err == nil {
+				if id > highestID {
+					highestID = id
+				}
+			}
+		}
+
+		// Set the counter to at least the highest ID
+		if highestID > 0 {
+			dse.SetAutoIncrementCounter(entityType, highestID)
+		}
+	}
+
+	return nil
 }
