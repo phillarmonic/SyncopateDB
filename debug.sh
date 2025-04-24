@@ -141,7 +141,7 @@ PRODUCT1='{
 }'
 
 PRODUCT1_RESPONSE=$(make_request "POST" "/entities/Product" "$PRODUCT1")
-PRODUCT1_ID=$(echo $PRODUCT1_RESPONSE | grep -o '"id":"[^"]*"' | cut -d'"' -f4)
+PRODUCT1_ID=$(echo $PRODUCT1_RESPONSE | grep -o '"id":[0-9]*' | cut -d':' -f2)
 echo "Created Product with ID: $PRODUCT1_ID"
 echo
 
@@ -158,7 +158,8 @@ PRODUCT2='{
 }'
 
 PRODUCT2_RESPONSE=$(make_request "POST" "/entities/Product" "$PRODUCT2")
-PRODUCT2_ID=$(echo $PRODUCT2_RESPONSE | grep -o '"id":"[^"]*"' | cut -d'"' -f4)
+# Updated to extract numeric IDs instead of string IDs
+PRODUCT2_ID=$(echo $PRODUCT2_RESPONSE | grep -o '"id":[0-9]*' | cut -d':' -f2)
 echo "Created Product with ID: $PRODUCT2_ID"
 echo
 
@@ -175,7 +176,8 @@ PRODUCT3='{
 }'
 
 PRODUCT3_RESPONSE=$(make_request "POST" "/entities/Product" "$PRODUCT3")
-PRODUCT3_ID=$(echo $PRODUCT3_RESPONSE | grep -o '"id":"[^"]*"' | cut -d'"' -f4)
+# Updated to extract numeric IDs instead of string IDs
+PRODUCT3_ID=$(echo $PRODUCT3_RESPONSE | grep -o '"id":[0-9]*' | cut -d':' -f2)
 echo "Created Product with ID: $PRODUCT3_ID"
 echo
 
@@ -244,7 +246,8 @@ PRODUCT_WITH_NULLS='{
 }'
 
 PRODUCT_NULL_RESPONSE=$(make_request "POST" "/entities/Product" "$PRODUCT_WITH_NULLS")
-PRODUCT_NULL_ID=$(echo $PRODUCT_NULL_RESPONSE | grep -o '"id":"[^"]*"' | cut -d'"' -f4)
+# Updated to extract numeric IDs instead of string IDs
+PRODUCT_NULL_ID=$(echo $PRODUCT_NULL_RESPONSE | grep -o '"id":[0-9]*' | cut -d':' -f2)
 echo "Created Product with ID: $PRODUCT_NULL_ID"
 echo
 
