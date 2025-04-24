@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -18,23 +19,6 @@ import (
 	"github.com/phillarmonic/syncopate-db/internal/common"
 	"github.com/sirupsen/logrus"
 )
-
-// Operation types for WAL entries
-const (
-	OpRegisterEntityType = iota + 1
-	OpInsertEntity
-	OpUpdateEntity
-	OpDeleteEntity
-)
-
-// WALEntry represents a write-ahead log entry
-type WALEntry struct {
-	Timestamp  int64
-	Operation  int
-	EntityType string
-	EntityID   string
-	Data       []byte // Compressed serialized data
-}
 
 // Engine implements disk persistence for the datastore
 type Engine struct {
@@ -49,7 +33,11 @@ type Engine struct {
 	snapshotInterval time.Duration
 	stopSnapshot     chan struct{}
 	snapshotTicker   *time.Ticker
-	useCompression   bool // Flag to indicate if compression is enabled
+	useCompression   bool       // Flag to indicate if compression is enabled
+	walSequence      uint64     // Last used WAL sequence number
+	walSeqMutex      sync.Mutex // Mutex specifically for sequence number
+	currentTxns      map[string]*Transaction
+	txnMu            sync.Mutex
 }
 
 // Config holds configuration for the persistence engine
@@ -146,9 +134,11 @@ func NewPersistenceEngine(config Config) (*Engine, error) {
 		snapshotInterval: config.SnapshotInterval,
 		stopSnapshot:     make(chan struct{}),
 		useCompression:   useCompression,
+		walSequence:      0, // Initialize sequence counter
+		currentTxns:      make(map[string]*Transaction),
 	}
 
-	// Start snapshot routine
+	// Start a snapshot routine
 	if config.SnapshotInterval > 0 {
 		engine.startSnapshotRoutine()
 	}
@@ -204,137 +194,6 @@ func (pe *Engine) Decompress(data []byte) ([]byte, error) {
 	return pe.decompressor.DecodeAll(data, nil)
 }
 
-// WriteWALEntry writes an operation to the write-ahead log
-func (pe *Engine) WriteWALEntry(op int, entityType, entityID string, data []byte) error {
-	// Check if WAL is disabled in settings
-	if !settings.Config.EnableWAL {
-		return nil // Skip WAL if disabled
-	}
-
-	// Create WAL entry outside of the lock
-	entry := WALEntry{
-		Timestamp:  time.Now().UnixNano(),
-		Operation:  op,
-		EntityType: entityType,
-		EntityID:   entityID,
-		Data:       pe.Compress(data),
-	}
-
-	// Serialize entry
-	var buf bytes.Buffer
-	if err := gob.NewEncoder(&buf).Encode(entry); err != nil {
-		return fmt.Errorf("failed to encode WAL entry: %w", err)
-	}
-
-	// Create the key
-	key := fmt.Sprintf("wal:%d:%s:%s", entry.Timestamp, entityType, entityID)
-
-	// No need to lock for this DB operation - Badger handles its own thread safety
-	return pe.db.Update(func(txn *badger.Txn) error {
-		return txn.Set([]byte(key), buf.Bytes())
-	})
-}
-
-// LoadWAL loads all WAL entries and applies them to the in-memory store
-// This should only be called during initialization before the server starts
-func (pe *Engine) LoadWAL(store common.DatastoreEngine) error {
-	// No need for RLock here since this is called during initialization
-
-	return pe.db.View(func(txn *badger.Txn) error {
-		opts := badger.DefaultIteratorOptions
-		opts.Prefix = []byte("wal:")
-
-		it := txn.NewIterator(opts)
-		defer it.Close()
-
-		for it.Rewind(); it.Valid(); it.Next() {
-			item := it.Item()
-
-			err := item.Value(func(val []byte) error {
-				var entry WALEntry
-				buf := bytes.NewBuffer(val)
-
-				if err := gob.NewDecoder(buf).Decode(&entry); err != nil {
-					return fmt.Errorf("failed to decode WAL entry: %w", err)
-				}
-
-				// Decompress data
-				data, err := pe.Decompress(entry.Data)
-				if err != nil {
-					return fmt.Errorf("failed to decompress WAL data: %w", err)
-				}
-
-				// Apply operation to the store
-				return pe.applyOperation(store, entry.Operation, entry.EntityType, entry.EntityID, data)
-			})
-
-			if err != nil {
-				return err
-			}
-		}
-
-		return nil
-	})
-}
-
-// applyOperation applies a WAL operation to the datastore
-// This is only called during initialization
-func (pe *Engine) applyOperation(store common.DatastoreEngine, op int, entityType, entityID string, data []byte) error {
-	switch op {
-	case OpRegisterEntityType:
-		var def common.EntityDefinition
-		if err := gob.NewDecoder(bytes.NewBuffer(data)).Decode(&def); err != nil {
-			return err
-		}
-
-		// Check if the entity type already exists before trying to register it
-		existingDef, err := store.GetEntityDefinition(def.Name)
-		if err == nil {
-			// Entity type already exists, compare the definitions
-			if compareEntityDefinitions(existingDef, def) {
-				// Definitions are identical, skip registration
-				pe.logger.Debugf("Entity type %s already exists during WAL replay with identical definition, skipping registration", def.Name)
-				return nil
-			} else {
-				// Definitions are different, log a warning with details
-				pe.logger.Warnf("Entity type %s already exists during WAL replay with DIFFERENT definition. This may indicate a schema change that wasn't properly migrated.", def.Name)
-				pe.logger.Warnf("Existing fields: %v, New fields: %v", existingDef.Fields, def.Fields)
-				// Continue with existing definition - don't try to re-register
-				return nil
-			}
-		}
-
-		// When loading from persistence, we need to make sure internal fields
-		// are properly marked before validation
-		for i := range def.Fields {
-			if strings.HasPrefix(def.Fields[i].Name, "_") {
-				def.Fields[i].Internal = true
-			}
-		}
-
-		return store.RegisterEntityType(def)
-	case OpInsertEntity:
-		var fields map[string]interface{}
-		if err := gob.NewDecoder(bytes.NewBuffer(data)).Decode(&fields); err != nil {
-			return err
-		}
-		return store.Insert(entityType, entityID, fields)
-
-	case OpUpdateEntity:
-		var fields map[string]interface{}
-		if err := gob.NewDecoder(bytes.NewBuffer(data)).Decode(&fields); err != nil {
-			return err
-		}
-		return store.Update(entityID, fields)
-
-	case OpDeleteEntity:
-		return store.Delete(entityID)
-
-	default:
-		return fmt.Errorf("unknown operation: %d", op)
-	}
-}
-
 // TakeSnapshot creates a full snapshot of the current state
 func (pe *Engine) TakeSnapshot(store common.DatastoreEngine) error {
 	// Get the current timestamp and create keys outside the lock
@@ -383,8 +242,8 @@ func (pe *Engine) TakeSnapshot(store common.DatastoreEngine) error {
 	// Compress the snapshot
 	compressedData := pe.Compress(buf.Bytes())
 
-	// Write the snapshot to the database - Badger handles its own thread safety
-	return pe.db.Update(func(txn *badger.Txn) error {
+	// Write the snapshot to the database
+	err := pe.db.Update(func(txn *badger.Txn) error {
 		// Store the snapshot
 		if err := txn.Set([]byte(snapshotKey), compressedData); err != nil {
 			return err
@@ -397,6 +256,18 @@ func (pe *Engine) TakeSnapshot(store common.DatastoreEngine) error {
 
 		return txn.Set(latestKey, latestValue)
 	})
+
+	if err != nil {
+		return err
+	}
+
+	// Prune old WAL entries now that we have a new snapshot
+	if err := pe.PruneWALBeforeTimestamp(timestamp); err != nil {
+		pe.logger.Warnf("Failed to prune WAL entries: %v", err)
+		// Continue even if pruning fails - this is not fatal
+	}
+
+	return nil
 }
 
 // LoadLatestSnapshot loads the most recent snapshot
@@ -813,4 +684,131 @@ func (pe *Engine) SaveCounter(entityType string, counter uint64) error {
 	return pe.db.Update(func(txn *badger.Txn) error {
 		return txn.Set([]byte(key), value)
 	})
+}
+
+// PruneWALBeforeTimestamp removes WAL entries older than the given timestamp
+func (pe *Engine) PruneWALBeforeTimestamp(timestamp int64) error {
+	return pe.db.Update(func(txn *badger.Txn) error {
+		opts := badger.DefaultIteratorOptions
+		opts.Prefix = []byte("wal:")
+
+		it := txn.NewIterator(opts)
+		defer it.Close()
+
+		keysToDelete := [][]byte{}
+
+		// Collect all WAL keys before the timestamp
+		for it.Rewind(); it.Valid(); it.Next() {
+			item := it.Item()
+			key := item.Key()
+
+			// Parse the timestamp from the key (format: "wal:timestamp:entityType:entityID")
+			keyParts := strings.SplitN(string(key), ":", 4)
+			if len(keyParts) < 2 {
+				continue // Skip malformed keys
+			}
+
+			entryTimestamp, err := strconv.ParseInt(keyParts[1], 10, 64)
+			if err != nil {
+				pe.logger.Warnf("Invalid timestamp in WAL key %s: %v", string(key), err)
+				continue
+			}
+
+			if entryTimestamp <= timestamp {
+				keysToDelete = append(keysToDelete, append([]byte{}, key...))
+			}
+		}
+
+		// Delete collected keys
+		for _, key := range keysToDelete {
+			if err := txn.Delete(key); err != nil {
+				return fmt.Errorf("failed to delete old WAL entry: %w", err)
+			}
+		}
+
+		pe.logger.Infof("Pruned %d WAL entries older than %s", len(keysToDelete),
+			time.Unix(0, timestamp).Format(time.RFC3339))
+		return nil
+	})
+}
+
+// applyOperationWithErrorHandling applies a WAL operation with improved error handling
+func (pe *Engine) applyOperationWithErrorHandling(store common.DatastoreEngine, op int, entityType, entityID string, data []byte) error {
+	switch op {
+	case OpRegisterEntityType:
+		var def common.EntityDefinition
+		if err := gob.NewDecoder(bytes.NewBuffer(data)).Decode(&def); err != nil {
+			return fmt.Errorf("failed to decode entity definition: %w", err)
+		}
+
+		// Check if the entity type already exists
+		existingDef, err := store.GetEntityDefinition(def.Name)
+		if err == nil {
+			// Entity type already exists, compare the definitions
+			if compareEntityDefinitions(existingDef, def) {
+				// Definitions are identical, skip registration
+				pe.logger.Debugf("Entity type %s already exists with identical definition, skipping", def.Name)
+				return nil
+			} else {
+				// Definitions are different, log a warning
+				pe.logger.Warnf("Entity type %s already exists with different definition, using existing definition", def.Name)
+				return nil
+			}
+		}
+
+		// Mark internal fields
+		for i := range def.Fields {
+			if strings.HasPrefix(def.Fields[i].Name, "_") {
+				def.Fields[i].Internal = true
+			}
+		}
+
+		return store.RegisterEntityType(def)
+
+	case OpInsertEntity:
+		var fields map[string]interface{}
+		if err := gob.NewDecoder(bytes.NewBuffer(data)).Decode(&fields); err != nil {
+			return fmt.Errorf("failed to decode entity fields: %w", err)
+		}
+
+		// Check if entity already exists before inserting
+		_, err := store.Get(entityID)
+		if err == nil {
+			// Entity already exists, skip insertion
+			pe.logger.Infof("Entity %s already exists, skipping insertion", entityID)
+			return nil
+		}
+
+		return store.Insert(entityType, entityID, fields)
+
+	case OpUpdateEntity:
+		var fields map[string]interface{}
+		if err := gob.NewDecoder(bytes.NewBuffer(data)).Decode(&fields); err != nil {
+			return fmt.Errorf("failed to decode update fields: %w", err)
+		}
+
+		// Check if entity exists before updating
+		_, err := store.Get(entityID)
+		if err != nil {
+			// Entity doesn't exist, skip update
+			pe.logger.Warnf("Entity %s doesn't exist, skipping update", entityID)
+			return nil
+		}
+
+		return store.Update(entityID, fields)
+
+	case OpDeleteEntity:
+		// Check if entity exists before deleting
+		_, err := store.Get(entityID)
+		if err != nil {
+			// Entity doesn't exist, skip deletion
+			pe.logger.Warnf("Entity %s doesn't exist, skipping deletion", entityID)
+			return nil
+		}
+
+		return store.Delete(entityID)
+
+	default:
+		return fmt.Errorf("unknown operation: %d", op)
+	}
 }
