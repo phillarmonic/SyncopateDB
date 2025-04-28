@@ -23,6 +23,7 @@ func NewQueryService(engine *Engine) *QueryService {
 }
 
 // Query executes a query against the data store
+// Query executes a query against the data store
 func (qs *QueryService) Query(options QueryOptions) ([]common.Entity, error) {
 	qs.engine.mu.RLock()
 	defer qs.engine.mu.RUnlock()
@@ -33,10 +34,10 @@ func (qs *QueryService) Query(options QueryOptions) ([]common.Entity, error) {
 	}
 
 	// Start with all entities of the specified type
-	entityIDs := make([]string, 0)
-	for id, entity := range qs.engine.entities {
+	matchingEntities := make([]common.Entity, 0)
+	for _, entity := range qs.engine.entities {
 		if entity.Type == options.EntityType {
-			entityIDs = append(entityIDs, id)
+			matchingEntities = append(matchingEntities, entity)
 		}
 	}
 
@@ -57,23 +58,23 @@ func (qs *QueryService) Query(options QueryOptions) ([]common.Entity, error) {
 			strValue := qs.engine.getIndexableValue(f.Value)
 			indexedIDs := qs.engine.indices[options.EntityType][f.Field][strValue]
 
-			// Intersect with current set of IDs
-			newEntityIDs := make([]string, 0)
+			// Create a map for efficient lookup
 			idMap := make(map[string]bool)
 			for _, id := range indexedIDs {
 				idMap[id] = true
 			}
 
-			for _, id := range entityIDs {
-				if idMap[id] {
-					newEntityIDs = append(newEntityIDs, id)
+			// Filter entities using the index
+			filteredEntities := make([]common.Entity, 0)
+			for _, entity := range matchingEntities {
+				if idMap[entity.ID] {
+					filteredEntities = append(filteredEntities, entity)
 				}
 			}
-
-			entityIDs = newEntityIDs
+			matchingEntities = filteredEntities
 		} else if f.Operator == FilterFuzzy {
 			// Handle fuzzy search separately
-			filteredIDs := make([]string, 0)
+			filteredEntities := make([]common.Entity, 0)
 			threshold := 0.7 // Default threshold
 			maxDistance := 3 // Default max distance
 
@@ -87,8 +88,7 @@ func (qs *QueryService) Query(options QueryOptions) ([]common.Entity, error) {
 				return nil, errors.New("fuzzy search value must be a string")
 			}
 
-			for _, id := range entityIDs {
-				entity := qs.engine.entities[id]
+			for _, entity := range matchingEntities {
 				value, exists := entity.Fields[f.Field]
 				if !exists {
 					continue
@@ -101,17 +101,16 @@ func (qs *QueryService) Query(options QueryOptions) ([]common.Entity, error) {
 
 				// Use fuzzy matching algorithm
 				if qs.fuzzyMatch(fieldStr, searchStr, threshold, maxDistance) {
-					filteredIDs = append(filteredIDs, id)
+					filteredEntities = append(filteredEntities, entity)
 				}
 			}
 
-			entityIDs = filteredIDs
+			matchingEntities = filteredEntities
 		} else {
 			// No index or non-equality operator, filter manually
-			filteredIDs := make([]string, 0)
+			filteredEntities := make([]common.Entity, 0)
 
-			for _, id := range entityIDs {
-				entity := qs.engine.entities[id]
+			for _, entity := range matchingEntities {
 				value, exists := entity.Fields[f.Field]
 
 				if !exists {
@@ -119,51 +118,31 @@ func (qs *QueryService) Query(options QueryOptions) ([]common.Entity, error) {
 				}
 
 				if qs.matchesFilter(value, f.Operator, f.Value) {
-					filteredIDs = append(filteredIDs, id)
+					filteredEntities = append(filteredEntities, entity)
 				}
 			}
 
-			entityIDs = filteredIDs
+			matchingEntities = filteredEntities
 		}
 	}
 
 	// Sort results if needed
 	if options.OrderBy != "" {
-		// Create a slice of entities for sorting
-		entitiesToSort := make([]common.Entity, 0, len(entityIDs))
-		for _, id := range entityIDs {
-			entitiesToSort = append(entitiesToSort, qs.engine.entities[id])
-		}
-
 		// Sort the entities
-		qs.sortEntities(entitiesToSort, options.OrderBy, options.OrderDesc)
-
-		// Extract the sorted IDs
-		entityIDs = make([]string, len(entitiesToSort))
-		for i, entity := range entitiesToSort {
-			entityIDs[i] = entity.ID
-		}
+		qs.sortEntities(matchingEntities, options.OrderBy, options.OrderDesc)
 	}
 
 	// Apply offset and limit
-	if options.Offset >= len(entityIDs) {
+	if options.Offset >= len(matchingEntities) {
 		return []common.Entity{}, nil
 	}
 
-	end := len(entityIDs)
+	end := len(matchingEntities)
 	if options.Limit > 0 && options.Offset+options.Limit < end {
 		end = options.Offset + options.Limit
 	}
 
-	entityIDs = entityIDs[options.Offset:end]
-
-	// Collect the final set of entities
-	results := make([]common.Entity, len(entityIDs))
-	for i, id := range entityIDs {
-		results[i] = qs.engine.entities[id]
-	}
-
-	return results, nil
+	return matchingEntities[options.Offset:end], nil
 }
 
 // Levenshtein calculates the Levenshtein distance between two strings
@@ -631,6 +610,7 @@ func (qs *QueryService) sortEntities(entities []common.Entity, field string, des
 }
 
 // ExecutePaginatedQuery executes a query and returns a paginated response
+// ExecutePaginatedQuery executes a query and returns a paginated response
 func (qs *QueryService) ExecutePaginatedQuery(options QueryOptions) (*PaginatedResponse, error) {
 	// Set the default sort (internal) field if none is specified
 	if options.OrderBy == "" {
@@ -639,23 +619,33 @@ func (qs *QueryService) ExecutePaginatedQuery(options QueryOptions) (*PaginatedR
 		options.OrderDesc = false
 	}
 
-	results, err := qs.Query(options)
+	// Execute the query with filters but without pagination limits
+	// This gets us all matching results for accurate counting
+	queryOptionsForCount := options
+	queryOptionsForCount.Offset = 0
+	queryOptionsForCount.Limit = 0 // No limit to get all matches for counting
+
+	allMatchingResults, err := qs.Query(queryOptionsForCount)
 	if err != nil {
 		return nil, err
 	}
 
-	total, err := qs.engine.GetEntityCount(options.EntityType)
+	// Total filtered count is the number of matches after all filters are applied
+	totalFilteredCount := len(allMatchingResults)
+
+	// Now execute the actual query with pagination
+	results, err := qs.Query(options)
 	if err != nil {
 		return nil, err
 	}
 
 	return &PaginatedResponse{
 		Data:       results,
-		Total:      total,
+		Total:      totalFilteredCount, // Use filtered count instead of total entity count
 		Count:      len(results),
 		Limit:      options.Limit,
 		Offset:     options.Offset,
-		HasMore:    options.Offset+len(results) < total,
+		HasMore:    options.Offset+len(results) < totalFilteredCount,
 		EntityType: options.EntityType,
 	}, nil
 }
