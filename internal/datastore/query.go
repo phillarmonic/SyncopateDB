@@ -294,6 +294,27 @@ func (qs *QueryService) matchesFilter(value interface{}, operator string, filter
 		return qs.compareValues(value, operator, filterValue)
 
 	case FilterContains:
+		// Handle arrays - check if the array contains the filter value
+		if valueArr, ok := value.([]interface{}); ok {
+			for _, v := range valueArr {
+				// For string array elements, try string contains check
+				if strItem, ok := v.(string); ok {
+					if strFilter, ok := filterValue.(string); ok {
+						if strings.Contains(strings.ToLower(strItem), strings.ToLower(strFilter)) {
+							return true
+						}
+					} else if reflect.DeepEqual(v, filterValue) {
+						return true
+					}
+				} else if reflect.DeepEqual(v, filterValue) {
+					// For non-string elements, check equality
+					return true
+				}
+			}
+			return false
+		}
+
+		// Original string contains check
 		strValue, ok1 := value.(string)
 		strFilter, ok2 := filterValue.(string)
 		if ok1 && ok2 {
@@ -323,12 +344,81 @@ func (qs *QueryService) matchesFilter(value interface{}, operator string, filter
 			return false
 		}
 
+		// Check if any value in the filter slice equals the field value
 		for _, v := range sliceFilter {
 			if reflect.DeepEqual(value, v) {
 				return true
 			}
 		}
+
+		// If field value is an array, check if any element matches any filter value
+		if valueArr, ok := value.([]interface{}); ok {
+			for _, fieldVal := range valueArr {
+				for _, filterVal := range sliceFilter {
+					if reflect.DeepEqual(fieldVal, filterVal) {
+						return true
+					}
+				}
+			}
+		}
+
 		return false
+
+	case FilterArrayContains:
+		// Check if an array field contains the specific value
+		valueArr, ok := value.([]interface{})
+		if !ok {
+			return false // Not an array field
+		}
+
+		for _, v := range valueArr {
+			if reflect.DeepEqual(v, filterValue) {
+				return true
+			}
+		}
+		return false
+
+	case FilterArrayContainsAny:
+		// Check if an array field contains any of the values in the filter array
+		valueArr, ok1 := value.([]interface{})
+		filterArr, ok2 := filterValue.([]interface{})
+
+		if !ok1 || !ok2 {
+			return false // Either not an array field or not an array filter
+		}
+
+		for _, fieldVal := range valueArr {
+			for _, filterVal := range filterArr {
+				if reflect.DeepEqual(fieldVal, filterVal) {
+					return true
+				}
+			}
+		}
+		return false
+
+	case FilterArrayContainsAll:
+		// Check if an array field contains all values in the filter array
+		valueArr, ok1 := value.([]interface{})
+		filterArr, ok2 := filterValue.([]interface{})
+
+		if !ok1 || !ok2 {
+			return false // Either not an array field or not an array filter
+		}
+
+		// For each filter value, check if it exists in the field array
+		for _, filterVal := range filterArr {
+			found := false
+			for _, fieldVal := range valueArr {
+				if reflect.DeepEqual(fieldVal, filterVal) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return false // One required value wasn't found
+			}
+		}
+		return true // All values were found
 
 	default:
 		return false

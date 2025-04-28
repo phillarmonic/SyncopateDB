@@ -16,17 +16,20 @@ const (
 
 // Filter types for queries
 const (
-	FilterEq         = "eq"
-	FilterNeq        = "neq"
-	FilterGt         = "gt"
-	FilterGte        = "gte"
-	FilterLt         = "lt"
-	FilterLte        = "lte"
-	FilterContains   = "contains"
-	FilterStartsWith = "startswith"
-	FilterEndsWith   = "endswith"
-	FilterIn         = "in"
-	FilterFuzzy      = "fuzzy"
+	FilterEq               = "eq"
+	FilterNeq              = "neq"
+	FilterGt               = "gt"
+	FilterGte              = "gte"
+	FilterLt               = "lt"
+	FilterLte              = "lte"
+	FilterContains         = "contains"
+	FilterStartsWith       = "startswith"
+	FilterEndsWith         = "endswith"
+	FilterIn               = "in"
+	FilterFuzzy            = "fuzzy"
+	FilterArrayContains    = "array_contains"     // Check if array contains a specific value
+	FilterArrayContainsAny = "array_contains_any" // Check if array contains any of the specified values
+	FilterArrayContainsAll = "array_contains_all" // Check if array contains all the specified values
 )
 
 // QueryOptions defines parameters for running a query
