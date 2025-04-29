@@ -29,7 +29,7 @@ SyncopateDB is a flexible, lightweight data store with advanced query capabiliti
 
 - **Schema Definition**: Define entity types with field definitions
 - **Indexing**: Create indexes for fast data retrieval
-- **Multiple ID Strategies**: Support for auto-increment, UUID, CUID, and custom ID generation
+- **Multiple ID Strategies**: Support for auto-increment, UUID, CUID generation
 - **Advanced Querying**: Filter, sort, and paginate data with a flexible query API
 - **Fuzzy Search**: Find data using fuzzy matching algorithms
 - **Array Operations**: Query for values within arrays
@@ -62,6 +62,7 @@ go build ./cmd/main.go
 ```
 
 2. The server accepts the following command-line flags:
+   
    - `--port`: Port to listen on (default: 8080)
    - `--log-level`: Log level (debug, info, warn, error)
    - `--data-dir`: Directory for data storage (default: ./data)
@@ -79,32 +80,32 @@ go build ./cmd/main.go
 
 Entity types define the structure of your data.
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | /api/v1/entity-types | List all entity types |
-| POST | /api/v1/entity-types | Create a new entity type |
-| GET | /api/v1/entity-types/{name} | Get a specific entity type |
-| PUT | /api/v1/entity-types/{name} | Update a specific entity type |
+| Method | Endpoint                    | Description                   |
+| ------ | --------------------------- | ----------------------------- |
+| GET    | /api/v1/entity-types        | List all entity types         |
+| POST   | /api/v1/entity-types        | Create a new entity type      |
+| GET    | /api/v1/entity-types/{name} | Get a specific entity type    |
+| PUT    | /api/v1/entity-types/{name} | Update a specific entity type |
 
 ### Entities
 
 Entities are instances of entity types containing actual data.
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | /api/v1/entities/{type} | List entities of a specific type |
-| POST | /api/v1/entities/{type} | Create a new entity |
-| GET | /api/v1/entities/{type}/{id} | Get a specific entity |
-| PUT | /api/v1/entities/{type}/{id} | Update a specific entity |
-| DELETE | /api/v1/entities/{type}/{id} | Delete a specific entity |
+| Method | Endpoint                     | Description                      |
+| ------ | ---------------------------- | -------------------------------- |
+| GET    | /api/v1/entities/{type}      | List entities of a specific type |
+| POST   | /api/v1/entities/{type}      | Create a new entity              |
+| GET    | /api/v1/entities/{type}/{id} | Get a specific entity            |
+| PUT    | /api/v1/entities/{type}/{id} | Update a specific entity         |
+| DELETE | /api/v1/entities/{type}/{id} | Delete a specific entity         |
 
 ### Querying
 
 SyncopateDB supports advanced querying with filtering, sorting, and pagination.
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | /api/v1/query | Execute a complex query |
+| Method | Endpoint      | Description             |
+| ------ | ------------- | ----------------------- |
+| POST   | /api/v1/query | Execute a complex query |
 
 ## Examples
 
@@ -295,43 +296,6 @@ curl -X POST http://localhost:8080/api/v1/entities/Product \
 
 Create a new customer with UUID generation:
 
-```bash
-curl -X POST http://localhost:8080/api/v1/entities/Customer \
-  -H "Content-Type: application/json" \
-  -d '{
-    "fields": {
-      "firstName": "Jane",
-      "lastName": "Smith",
-      "email": "jane.smith@example.com",
-      "address": {
-        "street": "123 Main St",
-        "city": "Springfield",
-        "state": "IL",
-        "zip": "62704"
-      },
-      "joinedAt": "2025-03-15T09:45:00Z"
-    }
-  }'
-```
-
-Create a new product with custom ID:
-
-```bash
-curl -X POST http://localhost:8080/api/v1/entities/Product \
-  -H "Content-Type: application/json" \
-  -d '{
-    "id": "prod-001",
-    "fields": {
-      "name": "Ergonomic Mouse",
-      "description": "A comfortable mouse for long work sessions",
-      "price": 39.99,
-      "inStock": true,
-      "tags": ["electronics", "office", "ergonomic"],
-      "createdAt": "2025-03-28T10:30:00Z"
-    }
-  }'
-```
-
 ### Retrieving Entities
 
 List all products with pagination:
@@ -519,6 +483,7 @@ SyncopateDB uses a combination of Write-Ahead Logging (WAL) and periodic snapsho
 The persistence is handled by the [Badger](https://github.com/dgraph-io/badger) key-value store, which provides excellent performance on SSDs.
 
 Key persistence features:
+
 - Write-Ahead Logging for durability
 - Periodic snapshots for faster recovery
 - Automatic garbage collection
@@ -528,25 +493,31 @@ Key persistence features:
 ## Building from Source
 
 Prerequisites:
+
 - Go 1.23 or higher
 
 Steps:
+
 1. Clone the repository:
+   
    ```bash
    git clone https://github.com/phillarmonic/syncopate-db.git
    ```
 
 2. Navigate to the project directory:
+   
    ```bash
    cd syncopate-db
    ```
 
 3. Build the server:
+   
    ```bash
    go build -o syncopatedb ./cmd/main.go
    ```
 
 4. Run the server:
+   
    ```bash
    ./syncopatedb
    ```
