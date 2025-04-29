@@ -173,38 +173,31 @@ func (s *Server) Start() error {
 
 	settings.SetServerStarted(true)
 
-	if s.config.DebugMode {
-		// Debug mode: run server in the main thread to allow easier debugging
-		s.logger.Info("Starting server in DEBUG mode (synchronous) on " + addr)
-		return s.server.ListenAndServe()
-	} else {
-		// Normal mode: run server in a goroutine with graceful shutdown
-		s.logger.Info("Starting server in NORMAL mode (with goroutine) on " + addr)
+	s.logger.Info("SyncopateDB server is starting on " + addr)
 
-		// Start the server in a goroutine
-		go func() {
-			if err := s.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				s.logger.Fatalf("Could not start server: %v", err)
-			}
-		}()
-
-		// Wait for interrupt signal to gracefully shut down the server
-		quit := make(chan os.Signal, 1)
-		signal.Notify(quit, os.Interrupt)
-		<-quit
-
-		s.logger.Info("Server is shutting down...")
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-
-		if err := s.server.Shutdown(ctx); err != nil {
-			s.logger.Fatalf("Server shutdown error: %v", err)
-			return err
+	// Start the server in a goroutine
+	go func() {
+		if err := s.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			s.logger.Fatalf("Could not start server: %v", err)
 		}
+	}()
 
-		s.logger.Info("Server gracefully stopped")
-		return nil
+	// Wait for the interrupt signal to gracefully shut down the server
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, os.Interrupt)
+	<-quit
+
+	s.logger.Info("SyncopateDB Server is shutting down...")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := s.server.Shutdown(ctx); err != nil {
+		s.logger.Fatalf("Server shutdown error: %v", err)
+		return err
 	}
+
+	s.logger.Info("Server gracefully stopped")
+	return nil
 }
 
 // logMiddleware logs information about each request
