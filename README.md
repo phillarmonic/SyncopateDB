@@ -4,7 +4,7 @@
   <img src="https://github.com/user-attachments/assets/11dd16bf-f625-44cf-aa17-06d027544ce5" alt="syncopate" width="300">
 </p>
 
-SyncopateDB is a flexible, lightweight data store with advanced query capabilities. It provides a REST API for data storage and retrieval with robust features including indexing, complex queries, and persistence.
+SyncopateDB is a flexible, lightweight, optimized for SSD data store with advanced query capabilities. It provides a REST API for data storage and retrieval with robust features including indexing, complex queries, and persistence.
 
 ## Table of Contents
 
