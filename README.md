@@ -114,6 +114,7 @@ SyncopateDB supports advanced querying with filtering, sorting, and pagination.
 ## Examples
 
 ### Creating Entity Types
+Pro tip: If you want to use auto_increment, you can omit it from the payload and it'll be automatically selected.
 
 Create a "Product" entity type with auto-increment IDs:
 
