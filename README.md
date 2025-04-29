@@ -13,12 +13,14 @@ SyncopateDB is a flexible, lightweight data store with advanced query capabiliti
   - [Querying](#querying)
 - [Examples](#examples)
   - [Creating Entity Types](#creating-entity-types)
+  - [Updating Entity Types](#updating-entity-types)
   - [Listing Entity Types](#listing-entity-types)
   - [Creating Entities](#creating-entities)
   - [Retrieving Entities](#retrieving-entities)
   - [Updating Entities](#updating-entities)
   - [Deleting Entities](#deleting-entities)
   - [Advanced Querying](#advanced-querying)
+- [ID Generation Strategies](#id-generation-strategies)
 - [Configuration](#configuration)
 - [Persistence](#persistence)
 - [Building from Source](#building-from-source)
@@ -27,9 +29,13 @@ SyncopateDB is a flexible, lightweight data store with advanced query capabiliti
 
 - **Schema Definition**: Define entity types with field definitions
 - **Indexing**: Create indexes for fast data retrieval
+- **Multiple ID Strategies**: Support for auto-increment, UUID, CUID, and custom ID generation
 - **Advanced Querying**: Filter, sort, and paginate data with a flexible query API
 - **Fuzzy Search**: Find data using fuzzy matching algorithms
+- **Array Operations**: Query for values within arrays
+- **Transaction Support**: Group operations for atomic changes
 - **Persistence**: Store data on disk with WAL (Write-Ahead Logging) and snapshots
+- **Schema Evolution**: Update entity type definitions with compatibility checks
 - **RESTful API**: Easy-to-use HTTP API for all operations
 - **Go Library**: Use SyncopateDB as an embedded database in your Go applications
 
@@ -37,14 +43,14 @@ SyncopateDB is a flexible, lightweight data store with advanced query capabiliti
 
 ### Using pre-built binaries
 
-Download the latest release from [GitHub Releases](https://github.com/phillarmonic/syncopate-db/releases).
+Download the latest release from the GitHub Releases page.
 
 ### Building from source
 
 ```bash
 git clone https://github.com/phillarmonic/syncopate-db.git
 cd syncopate-db
-go build ./cmd/server
+go build ./cmd/main.go
 ```
 
 ## Getting Started
@@ -52,17 +58,18 @@ go build ./cmd/server
 1. Start the server:
 
 ```bash
-./server --port 8080 --data-dir ./data
+./main --port 8080 --data-dir ./data
 ```
 
 2. The server accepts the following command-line flags:
    - `--port`: Port to listen on (default: 8080)
    - `--log-level`: Log level (debug, info, warn, error)
    - `--data-dir`: Directory for data storage (default: ./data)
-   - `--memory-only`: Run in memory-only mode without persistence
    - `--cache-size`: Number of entities to cache in memory (default: 10000)
    - `--snapshot-interval`: Snapshot interval in seconds (default: 600)
    - `--sync-writes`: Sync writes to disk immediately (default: true)
+   - `--debug`: Enable debug mode for easier debugging
+   - `--color-logs`: Enable colorized log output
 
 3. Visit `http://localhost:8080/` to see the welcome message and verify the server is running.
 
@@ -77,6 +84,7 @@ Entity types define the structure of your data.
 | GET | /api/v1/entity-types | List all entity types |
 | POST | /api/v1/entity-types | Create a new entity type |
 | GET | /api/v1/entity-types/{name} | Get a specific entity type |
+| PUT | /api/v1/entity-types/{name} | Update a specific entity type |
 
 ### Entities
 
@@ -102,13 +110,14 @@ SyncopateDB supports advanced querying with filtering, sorting, and pagination.
 
 ### Creating Entity Types
 
-Create a "Product" entity type:
+Create a "Product" entity type with auto-increment IDs:
 
 ```bash
 curl -X POST http://localhost:8080/api/v1/entity-types \
   -H "Content-Type: application/json" \
   -d '{
     "name": "Product",
+    "idGenerator": "auto_increment",
     "fields": [
       {
         "name": "name",
@@ -150,13 +159,14 @@ curl -X POST http://localhost:8080/api/v1/entity-types \
   }'
 ```
 
-Create a "Customer" entity type:
+Create a "Customer" entity type with UUID IDs:
 
 ```bash
 curl -X POST http://localhost:8080/api/v1/entity-types \
   -H "Content-Type: application/json" \
   -d '{
     "name": "Customer",
+    "idGenerator": "uuid",
     "fields": [
       {
         "name": "firstName",
@@ -192,6 +202,64 @@ curl -X POST http://localhost:8080/api/v1/entity-types \
   }'
 ```
 
+### Updating Entity Types
+
+Update the "Product" entity type to add a new field:
+
+```bash
+curl -X PUT http://localhost:8080/api/v1/entity-types/Product \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Product",
+    "fields": [
+      {
+        "name": "name",
+        "type": "string",
+        "indexed": true,
+        "required": true
+      },
+      {
+        "name": "description",
+        "type": "text",
+        "indexed": false,
+        "required": false
+      },
+      {
+        "name": "price",
+        "type": "float",
+        "indexed": true,
+        "required": true
+      },
+      {
+        "name": "inStock",
+        "type": "boolean",
+        "indexed": true,
+        "required": true
+      },
+      {
+        "name": "tags",
+        "type": "json",
+        "indexed": false,
+        "required": false
+      },
+      {
+        "name": "createdAt",
+        "type": "datetime",
+        "indexed": true,
+        "required": true
+      },
+      {
+        "name": "category",
+        "type": "string",
+        "indexed": true,
+        "required": false
+      }
+    ]
+  }'
+```
+
+Note: You cannot change the ID generator type after creation, and cannot make existing fields required if they weren't before.
+
 ### Listing Entity Types
 
 List all entity types:
@@ -208,13 +276,12 @@ curl -X GET http://localhost:8080/api/v1/entity-types/Product
 
 ### Creating Entities
 
-Create a new product:
+Create a new product with auto-generated ID:
 
 ```bash
 curl -X POST http://localhost:8080/api/v1/entities/Product \
   -H "Content-Type: application/json" \
   -d '{
-    "id": "prod-001",
     "fields": {
       "name": "Ergonomic Keyboard",
       "description": "A comfortable keyboard for long typing sessions",
@@ -226,13 +293,12 @@ curl -X POST http://localhost:8080/api/v1/entities/Product \
   }'
 ```
 
-Create a new customer:
+Create a new customer with UUID generation:
 
 ```bash
 curl -X POST http://localhost:8080/api/v1/entities/Customer \
   -H "Content-Type: application/json" \
   -d '{
-    "id": "cust-001",
     "fields": {
       "firstName": "Jane",
       "lastName": "Smith",
@@ -248,6 +314,24 @@ curl -X POST http://localhost:8080/api/v1/entities/Customer \
   }'
 ```
 
+Create a new product with custom ID:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/entities/Product \
+  -H "Content-Type: application/json" \
+  -d '{
+    "id": "prod-001",
+    "fields": {
+      "name": "Ergonomic Mouse",
+      "description": "A comfortable mouse for long work sessions",
+      "price": 39.99,
+      "inStock": true,
+      "tags": ["electronics", "office", "ergonomic"],
+      "createdAt": "2025-03-28T10:30:00Z"
+    }
+  }'
+```
+
 ### Retrieving Entities
 
 List all products with pagination:
@@ -259,7 +343,13 @@ curl -X GET "http://localhost:8080/api/v1/entities/Product?limit=10&offset=0"
 Get a specific product by ID:
 
 ```bash
-curl -X GET http://localhost:8080/api/v1/entities/Product/prod-001
+curl -X GET http://localhost:8080/api/v1/entities/Product/1
+```
+
+List products with sorting:
+
+```bash
+curl -X GET "http://localhost:8080/api/v1/entities/Product?limit=10&offset=0&orderBy=price&orderDesc=true"
 ```
 
 ### Updating Entities
@@ -267,7 +357,7 @@ curl -X GET http://localhost:8080/api/v1/entities/Product/prod-001
 Update a product:
 
 ```bash
-curl -X PUT http://localhost:8080/api/v1/entities/Product/prod-001 \
+curl -X PUT http://localhost:8080/api/v1/entities/Product/1 \
   -H "Content-Type: application/json" \
   -d '{
     "fields": {
@@ -282,7 +372,7 @@ curl -X PUT http://localhost:8080/api/v1/entities/Product/prod-001 \
 Delete a product:
 
 ```bash
-curl -X DELETE http://localhost:8080/api/v1/entities/Product/prod-001
+curl -X DELETE http://localhost:8080/api/v1/entities/Product/1
 ```
 
 ### Advanced Querying
@@ -341,7 +431,7 @@ curl -X POST http://localhost:8080/api/v1/query \
   }'
 ```
 
-Filter products by tags (using JSON field):
+Filter products by tags (array contains):
 
 ```bash
 curl -X POST http://localhost:8080/api/v1/query \
@@ -351,7 +441,7 @@ curl -X POST http://localhost:8080/api/v1/query \
     "filters": [
       {
         "field": "tags",
-        "operator": "contains",
+        "operator": "array_contains",
         "value": "ergonomic"
       }
     ],
@@ -360,30 +450,85 @@ curl -X POST http://localhost:8080/api/v1/query \
   }'
 ```
 
-## Configuration
-
-SyncopateDB can be configured through command-line flags when starting the server:
+Filter products containing all specified tags:
 
 ```bash
-./server --port 8080 --log-level=info --data-dir=./data --cache-size=20000 --snapshot-interval=300 --sync-writes=true
+curl -X POST http://localhost:8080/api/v1/query \
+  -H "Content-Type: application/json" \
+  -d '{
+    "entityType": "Product",
+    "filters": [
+      {
+        "field": "tags",
+        "operator": "array_contains_all",
+        "value": ["electronics", "ergonomic"]
+      }
+    ],
+    "limit": 10,
+    "offset": 0
+  }'
 ```
+
+## ID Generation Strategies
+
+SyncopateDB supports several ID generation strategies:
+
+1. **auto_increment**: Sequential numeric IDs (default)
+2. **uuid**: Universally Unique Identifiers (UUID v4)
+3. **cuid**: Collision-resistant IDs optimized for horizontal scaling
+4. **custom**: Client-provided IDs
+
+Specify the ID generation strategy when creating an entity type:
+
+```json
+{
+  "name": "Product",
+  "idGenerator": "uuid",
+  "fields": [...]
+}
+```
+
+## Configuration
+
+SyncopateDB can be configured through environment variables and command-line flags:
+
+### Environment Variables
+
+- `PORT`: Server port (default: 8080)
+- `DEBUG`: Enable debug mode (default: false)
+- `LOG_LEVEL`: Logging level (debug, info, warn, error)
+- `ENABLE_WAL`: Enable Write-Ahead Logging (default: true)
+- `ENABLE_ZSTD`: Enable ZSTD compression (default: false)
+- `COLORIZED_LOGS`: Enable colorized logging (default: true)
+
+### Command Line Flags
+
+- `--port`: Server port
+- `--log-level`: Logging level
+- `--data-dir`: Directory for data storage
+- `--cache-size`: Number of entities to cache in memory
+- `--snapshot-interval`: Snapshot interval in seconds
+- `--sync-writes`: Sync writes to disk immediately
+- `--debug`: Enable debug mode
+- `--color-logs`: Enable colorized logs
 
 ## Persistence
 
 SyncopateDB uses a combination of Write-Ahead Logging (WAL) and periodic snapshots for data persistence. This provides durability while maintaining good performance.
 
-The persistence is handled by the [Badger](https://github.com/dgraph-io/badger) key-value store, which provides excellent performance and reliability.
+The persistence is handled by the [Badger](https://github.com/dgraph-io/badger) key-value store, which provides excellent performance on SSDs.
 
-For development or testing where persistence isn't needed, you can use the `--memory-only` flag:
-
-```bash
-./server --memory-only
-```
+Key persistence features:
+- Write-Ahead Logging for durability
+- Periodic snapshots for faster recovery
+- Automatic garbage collection
+- Compression support (optional)
+- Automated backup capabilities
 
 ## Building from Source
 
 Prerequisites:
-- Go 1.24 or higher
+- Go 1.23 or higher
 
 Steps:
 1. Clone the repository:
@@ -398,18 +543,14 @@ Steps:
 
 3. Build the server:
    ```bash
-   go build -o server ./cmd/server
+   go build -o syncopatedb ./cmd/main.go
    ```
 
 4. Run the server:
    ```bash
-   ./server
+   ./syncopatedb
    ```
 
 ## License
 
-[MIT License](LICENSE)
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
+MIT License
