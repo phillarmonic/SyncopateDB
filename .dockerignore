@@ -1,0 +1,9 @@
+data
+.github
+bundle
+.gitignore
+.dockerfile
+README.md
+.vscode
+.idea
+.git
