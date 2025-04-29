@@ -77,11 +77,29 @@ func (s *Server) requestIDMiddleware(next http.Handler) http.Handler {
 // securityHeadersMiddleware adds security-related headers to responses
 func (s *Server) securityHeadersMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Add security headers
+		// Check if this is the visualization endpoint
+		isVisualization := r.URL.Path == "/api/v1/memory/visualization"
+
+		// Add security headers with appropriate CSP based on the endpoint
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'")
 		w.Header().Set("X-XSS-Protection", "1; mode=block")
+
+		// Set Content-Security-Policy
+		if isVisualization {
+			// Relaxed CSP for visualization page to allow charts and styles
+			w.Header().Set("Content-Security-Policy",
+				"default-src 'self'; "+
+					"script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; "+
+					"style-src 'self' 'unsafe-inline'; "+
+					"img-src 'self' data:; "+
+					"font-src 'self'; "+
+					"connect-src 'self'")
+		} else {
+			// Stricter CSP for other pages
+			w.Header().Set("Content-Security-Policy", "default-src 'self'")
+		}
+
 		next.ServeHTTP(w, r)
 	})
 }
