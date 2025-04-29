@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"github.com/phillarmonic/syncopate-db/internal/about"
 	"os"
 	"path/filepath"
 	"time"
@@ -33,6 +34,10 @@ func main() {
 	settings.Config.Debug = *debugMode
 	settings.Config.ColorizedLogs = *colorLogs
 
+	fmt.Println("SyncopateDB - Off-beat by design. On point by performance.")
+	fmt.Println("High performance, SSD-optimized DB")
+	fmt.Println(fmt.Sprintf("Version: %s", about.About().Version))
+	fmt.Println("")
 	// Set up logging
 	logger := logrus.New()
 	level, err := logrus.ParseLevel(string(settings.Config.LogLevel))
@@ -43,7 +48,7 @@ func main() {
 
 	// Choose formatter based on colorized setting
 	if settings.Config.ColorizedLogs {
-		// Configure text formatter with colors
+		// Configure a text formatter with colors
 		textFormatter := &logrus.TextFormatter{
 			ForceColors:            true,
 			DisableTimestamp:       false,

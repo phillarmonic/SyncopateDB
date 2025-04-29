@@ -1,0 +1,131 @@
+name: Build, Test, and (conditionally) Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  pull_request:
+    types: [ opened, synchronize, reopened ]
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+
+    strategy:
+      matrix:
+        goos: [linux, darwin]
+        goarch: [amd64, arm64]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install QEMU User-Mode Emulation
+        run: sudo apt-get update && sudo apt-get install -y qemu-user
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: linux/arm64,linux/amd64,darwin/arm64,darwin/amd64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          platforms: linux/amd64,linux/arm64,darwin/amd64,darwin/arm64
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+          cache-dependency-path: go.mod
+
+      - name: Install dependencies
+        run: go mod download
+
+      - name: Install UPX v5 (On Tux only)
+        if: matrix.goos == 'linux'
+        run: |
+          UPX_VERSION=5.0.0
+          echo "Installing UPX for amd64, version $UPX_VERSION"
+          curl -L https://github.com/upx/upx/releases/download/v$UPX_VERSION/upx-$UPX_VERSION-amd64_linux.tar.xz -o upx.tar.xz
+          tar -xf upx.tar.xz
+          sudo mv upx-$UPX_VERSION-amd64_linux/upx /usr/local/bin/
+          rm -rf upx.tar.xz upx-$UPX_VERSION-amd64_linux
+          upx --version
+        shell: bash
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          # This option ensures no dependency in C Libraries
+          CGO_ENABLED: 0
+        run: |
+          set -ex
+          mkdir -p dist/${{ matrix.goos }}-${{ matrix.goarch }}
+          go build -ldflags "-s -w" -o dist/${{ matrix.goos }}-${{ matrix.goarch }}/syncopatedb-${{ matrix.goos }}-${{ matrix.goarch }}
+
+      - name: Verify Binary is Statically Linked
+        run: |
+          set -ex
+          # Display the file type
+          file dist/${{ matrix.goos }}-${{ matrix.goarch }}/syncopatedb-${{ matrix.goos }}-${{ matrix.goarch }}
+          
+          # Run ldd and capture its output
+          ldd_output=$(ldd dist/${{ matrix.goos }}-${{ matrix.goarch }}/syncopatedb-${{ matrix.goos }}-${{ matrix.goarch }} 2>&1 || true)
+          
+          # Display the ldd output for debugging purposes
+          echo "$ldd_output"
+          
+          # Check if the output contains "not a dynamic executable"
+          if echo "$ldd_output" | grep -q "not a dynamic executable"; then
+            echo "✅ Binary is statically linked."
+          else
+            echo "❌ Binary is dynamically linked or ldd encountered an unexpected error."
+            exit 1
+          fi
+        shell: bash
+
+      # Compress Binary with UPX Using Installed UPX
+      - name: Compress Binary with UPX
+        if: matrix.goos == 'linux'
+        run: |
+          # Define the path to the binary
+          BINARY_PATH="dist/${{ matrix.goos }}-${{ matrix.goarch }}/syncopatedb-${{ matrix.goos }}-${{ matrix.goarch }}"
+          echo "Compressing $BINARY_PATH with UPX 5.0.0"
+          
+          # Compress the binary using UPX
+          upx --best "$BINARY_PATH"
+          
+          # Optional: Display the compressed binary size
+          du -h "$BINARY_PATH"
+        shell: bash
+
+      # Verify UPX Compression Integrity
+      - name: Verify UPX Compression
+        if: matrix.goos == 'linux'
+        run: |
+          BINARY_PATH="dist/${{ matrix.goos }}-${{ matrix.goarch }}/syncopatedb-${{ matrix.goos }}-${{ matrix.goarch }}"
+          echo "Verifying UPX compression for $BINARY_PATH"
+          
+          # Check the file type
+          file "$BINARY_PATH"
+          
+          # Verify the compressed binary
+          upx -t "$BINARY_PATH"
+        shell: bash
+
+      - name: Upload build artifacts (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v3
+        with:
+          name: build-logs
+          path: dist/${{ matrix.goos }}-${{ matrix.goarch }}
+
+      - name: Upload Release Asset
+        uses: softprops/action-gh-release@v2
+        if: success() && startsWith(github.ref, 'refs/tags/v')
+        with:
+          files: dist/${{ matrix.goos }}-${{ matrix.goarch }}/syncopatedb-${{ matrix.goos }}-${{ matrix.goarch }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
