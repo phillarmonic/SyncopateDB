@@ -23,7 +23,6 @@ func NewQueryService(engine *Engine) *QueryService {
 }
 
 // Query executes a query against the data store
-// Query executes a query against the data store
 func (qs *QueryService) Query(options QueryOptions) ([]common.Entity, error) {
 	qs.engine.mu.RLock()
 	defer qs.engine.mu.RUnlock()
@@ -609,7 +608,6 @@ func (qs *QueryService) sortEntities(entities []common.Entity, field string, des
 	})
 }
 
-// ExecutePaginatedQuery executes a query and returns a paginated response
 // ExecutePaginatedQuery executes a query and returns a paginated response
 func (qs *QueryService) ExecutePaginatedQuery(options QueryOptions) (*PaginatedResponse, error) {
 	// Set the default sort (internal) field if none is specified

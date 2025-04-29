@@ -771,7 +771,7 @@ func (pe *Engine) applyOperationWithErrorHandling(store common.DatastoreEngine, 
 		_, err := store.Get(entityID)
 		if err == nil {
 			// Entity already exists, skip insertion
-			pe.logger.Infof("Entity %s already exists, skipping insertion", entityID)
+			pe.logger.Debugf("Entity %s already exists, skipping insertion", entityID)
 			return nil
 		}
 

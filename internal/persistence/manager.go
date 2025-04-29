@@ -151,7 +151,7 @@ func (m *Manager) runGarbageCollectionCycle() {
 			m.logger.Warnf("Error during second value log GC: %v", err)
 		}
 	} else if err.Error() != "Nothing to discard" {
-		m.logger.Warnf("Error during value log GC: %v", err)
+		m.logger.Warnf("02: Error during value log GC: %v", err)
 	} else {
 		m.logger.Debug("Nothing to discard in garbage collection")
 	}

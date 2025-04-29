@@ -155,21 +155,21 @@ func (s *Server) handleListEntities(w http.ResponseWriter, r *http.Request) {
 
 	// Create a new response with the filtered and converted data
 	convertedResponse := struct {
-		Data       []interface{} `json:"data"`
 		Total      int           `json:"total"`
 		Count      int           `json:"count"`
 		Limit      int           `json:"limit"`
 		Offset     int           `json:"offset"`
 		HasMore    bool          `json:"hasMore"`
 		EntityType string        `json:"entityType"`
+		Data       []interface{} `json:"data"`
 	}{
-		Data:       filteredData,
 		Total:      response.Total,
 		Count:      response.Count,
 		Limit:      response.Limit,
 		Offset:     response.Offset,
 		HasMore:    response.HasMore,
 		EntityType: response.EntityType,
+		Data:       filteredData,
 	}
 
 	s.respondWithJSON(w, http.StatusOK, convertedResponse)
@@ -487,21 +487,21 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 
 	// Create a new response with the filtered and converted data
 	convertedResponse := struct {
-		Data       []interface{} `json:"data"`
 		Total      int           `json:"total"`
 		Count      int           `json:"count"`
 		Limit      int           `json:"limit"`
 		Offset     int           `json:"offset"`
 		HasMore    bool          `json:"hasMore"`
 		EntityType string        `json:"entityType"`
+		Data       []interface{} `json:"data"`
 	}{
-		Data:       filteredData,
 		Total:      response.Total,
 		Count:      response.Count,
 		Limit:      response.Limit,
 		Offset:     response.Offset,
 		HasMore:    response.HasMore,
 		EntityType: response.EntityType,
+		Data:       filteredData,
 	}
 
 	s.respondWithJSON(w, http.StatusOK, convertedResponse)

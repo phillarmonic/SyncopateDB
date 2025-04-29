@@ -104,7 +104,7 @@ func (s *Server) recoveryMiddleware(next http.Handler) http.Handler {
 
 // rateLimitMiddleware implements rate limiting with proper synchronization
 func (s *Server) rateLimitMiddleware(next http.Handler) http.Handler {
-	limiter := NewRateLimiter(100, time.Minute) // 100 requests per minute per IP
+	limiter := NewRateLimiter(1500, time.Second) // 1000 requests per second per IP
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ip := r.RemoteAddr

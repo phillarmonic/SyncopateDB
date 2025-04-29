@@ -58,11 +58,11 @@ type FuzzySearchOptions struct {
 
 // PaginatedResponse represents a paginated result of entities
 type PaginatedResponse struct {
-	Data       []common.Entity `json:"data"`
 	Total      int             `json:"total"`
 	Count      int             `json:"count"`
 	Limit      int             `json:"limit"`
 	Offset     int             `json:"offset"`
 	HasMore    bool            `json:"hasMore"`
 	EntityType string          `json:"entityType"`
+	Data       []common.Entity `json:"data"`
 }

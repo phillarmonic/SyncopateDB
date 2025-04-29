@@ -73,7 +73,7 @@ func main() {
 	}
 
 	// Initialize persistent data store
-	logger.Info("Initializing persistent data store...")
+	logger.Info("Loading the persistent data store...")
 
 	// Configure persistence
 	persistenceConfig := persistence.Config{
@@ -110,7 +110,7 @@ func main() {
 	}
 
 	// Log successful initialization
-	logger.Infof("Persistent data store initialized at %s", *dataDir)
+	logger.Infof("Persistent data store loaded at %s", *dataDir)
 
 	// Initialize query service
 	queryService = datastore.NewQueryService(engine)
@@ -122,8 +122,8 @@ func main() {
 		WriteTimeout: 15 * time.Second,
 		IdleTimeout:  60 * time.Second,
 		LogLevel:     level,
-		RateLimit:    100,                   // 100 requests per minute per IP
-		RateWindow:   time.Minute,           // 1 minute window
+		RateLimit:    1500,                  // Big intial rate limit
+		RateWindow:   time.Second,           // Second
 		DebugMode:    settings.Config.Debug, // Set debug mode from settings
 	}
 
@@ -144,7 +144,7 @@ func runGarbageCollection(manager *persistence.Manager, logger *logrus.Logger) {
 	defer ticker.Stop()
 
 	for range ticker.C {
-		logger.Debug("Running Badger value log garbage collection")
+		logger.Debug("Running backend value log garbage collection")
 		err := manager.RunValueLogGC(0.7) // 0.7 is the discard ratio
 		if err == nil {
 			// If GC succeeded, run it again to collect more garbage
@@ -152,8 +152,8 @@ func runGarbageCollection(manager *persistence.Manager, logger *logrus.Logger) {
 			// Add a small delay to give other processes a chance to run
 			time.Sleep(500 * time.Millisecond)
 			manager.RunValueLogGC(0.7)
-		} else if err != nil && err.Error() != "Nothing to discard" {
-			logger.Warnf("Error during value log GC: %v", err)
+		} else if err != nil && err.Error() != "Nothing to discard" && err.Error() != "Value log GC attempt didn't result in any cleanup" {
+			logger.Warnf("01 - Error during value log GC: %v", err)
 		}
 	}
 }
