@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"github.com/phillarmonic/syncopate-db/internal/about"
+	"github.com/phillarmonic/syncopate-db/internal/monitoring"
 	"os"
 	"path/filepath"
 	"time"
@@ -26,6 +27,13 @@ func main() {
 	syncWrites := flag.Bool("sync-writes", true, "Sync writes to disk immediately")
 	debugMode := flag.Bool("debug", settings.Config.Debug, "Enable debug mode (disables goroutines for easier debugging)")
 	colorLogs := flag.Bool("color-logs", settings.Config.ColorizedLogs, "Enable colorized log output")
+
+	// Memory monitoring flags
+	memoryInterval := flag.Int("memory-interval", 30, "Interval in seconds for memory usage reporting")
+	memoryQuiet := flag.Bool("memory-quiet", false, "If set, only shows memory stats at startup and shutdown")
+	memoryVerbose := flag.Bool("memory-verbose", false, "If set, shows detailed memory stats")
+	monitorMemory := flag.Bool("monitor-memory", true, "Enable memory monitoring")
+
 	flag.Parse()
 
 	// Update settings from flags (flags have higher priority)
@@ -38,6 +46,7 @@ func main() {
 	fmt.Println("High performance, SSD-optimized DB")
 	fmt.Println(fmt.Sprintf("Version: %s", about.About().Version))
 	fmt.Println("")
+
 	// Set up logging
 	logger := logrus.New()
 	level, err := logrus.ParseLevel(string(settings.Config.LogLevel))
@@ -127,18 +136,56 @@ func main() {
 		WriteTimeout: 15 * time.Second,
 		IdleTimeout:  60 * time.Second,
 		LogLevel:     level,
-		RateLimit:    1500,                  // Big intial rate limit
+		RateLimit:    1500,                  // Big initial rate limit
 		RateWindow:   time.Second,           // Second
 		DebugMode:    settings.Config.Debug, // Set debug mode from settings
 	}
 
 	server := api.NewServer(engine, queryService, serverConfig)
 
+	// Set up the terminal memory monitor if enabled
+	if *monitorMemory {
+		// Create the memory monitor
+		// the server will initialize and start it
+
+		// Get the memory monitor from the server
+		memoryMonitor := server.GetMemoryMonitor()
+
+		// Create terminal monitor with the server's memory monitor
+		terminalMonitor := monitoring.NewTerminalMonitor(memoryMonitor, logger, time.Duration(*memoryInterval)*time.Second)
+		terminalMonitor.SetQuietMode(*memoryQuiet)
+
+		// Start the terminal monitor
+		terminalMonitor.Start()
+
+		// For verbose mode, also log detailed memory statistics at startup
+		if *memoryVerbose {
+			rtStats := terminalMonitor.GetRuntimeStats()
+
+			// Log detailed memory information
+			logger.WithFields(logrus.Fields{
+				"heap_alloc":    rtStats["formatted"].(map[string]string)["heap_alloc"],
+				"heap_sys":      rtStats["formatted"].(map[string]string)["heap_sys"],
+				"stack_in_use":  rtStats["formatted"].(map[string]string)["stack_in_use"],
+				"goroutines":    rtStats["goroutines"],
+				"gc_percentage": fmt.Sprintf("%.2f%%", rtStats["gc_memory_percent"]),
+			}).Info("Detailed memory statistics")
+		}
+
+		// Defer stopping the terminal monitor
+		defer terminalMonitor.Stop()
+	}
+
 	// Add graceful shutdown for persistence
 	if persistenceManager != nil {
 		// Force a snapshot before exiting
 		fmt.Println("Press Ctrl+C to exit and save data")
 	}
+
+	logger.Info("Server starting at port:" + fmt.Sprintf("%d", settings.Config.Port))
+	logger.Info("Memory monitoring enabled. Access /api/v1/memory for statistics")
+	logger.Info("Memory visualization available at /api/v1/memory/visualization")
+	logger.Info("Diagnostics available at /api/v1/diagnostics")
 
 	logger.Info(server.Start())
 }

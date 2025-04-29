@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"github.com/phillarmonic/syncopate-db/internal/monitoring"
 	"github.com/phillarmonic/syncopate-db/internal/settings"
 	"net/http"
 	"os"
@@ -54,14 +55,15 @@ func DefaultServerConfig() ServerConfig {
 
 // Server represents the REST API server
 type Server struct {
-	router       *mux.Router
-	config       ServerConfig
-	server       *http.Server
-	engine       common.DatastoreEngine
-	queryService *datastore.QueryService
-	logger       *logrus.Logger
-	rateLimiter  *RateLimiter
-	mu           sync.RWMutex // Protect response writers in concurrent handlers
+	router        *mux.Router
+	config        ServerConfig
+	server        *http.Server
+	engine        common.DatastoreEngine
+	queryService  *datastore.QueryService
+	logger        *logrus.Logger
+	rateLimiter   *RateLimiter
+	memoryMonitor *monitoring.MemoryMonitor
+	mu            sync.RWMutex // Protect response writers in concurrent handlers
 }
 
 // NewServer creates a new REST API server
@@ -70,13 +72,20 @@ func NewServer(engine common.DatastoreEngine, queryService *datastore.QueryServi
 	logger.SetLevel(config.LogLevel)
 	logger.SetFormatter(&logrus.JSONFormatter{})
 
+	// Create a memory monitor with 30-second interval and store up to 100 samples
+	memoryMonitor := monitoring.NewMemoryMonitor(30*time.Second, 100)
+
+	// Start the memory monitor immediately
+	memoryMonitor.Start()
+
 	server := &Server{
-		router:       mux.NewRouter(),
-		config:       config,
-		engine:       engine,
-		queryService: queryService,
-		logger:       logger,
-		rateLimiter:  NewRateLimiter(config.RateLimit, config.RateWindow),
+		router:        mux.NewRouter(),
+		config:        config,
+		engine:        engine,
+		queryService:  queryService,
+		logger:        logger,
+		rateLimiter:   NewRateLimiter(config.RateLimit, config.RateWindow),
+		memoryMonitor: memoryMonitor, // Initialize the memory monitor
 	}
 
 	server.setupRoutes()
@@ -118,6 +127,14 @@ func (s *Server) setupRoutes() {
 		// Add a new debug endpoint for schema migrations
 		s.router.HandleFunc("/debug/schema", s.handleDebugSchema).Methods(http.MethodGet)
 	}
+
+	api.HandleFunc("/memory", s.handleMemoryStats).Methods(http.MethodGet)
+	api.HandleFunc("/memory/visualization", s.handleVisualizationHTML).Methods(http.MethodGet)
+	api.HandleFunc("/memory/sample", s.handleForceSample).Methods(http.MethodPost)
+	api.HandleFunc("/memory/config", s.handleMemoryConfig).Methods(http.MethodGet, http.MethodPost)
+
+	// Diagnostics route
+	api.HandleFunc("/diagnostics", s.handleDiagnostics).Methods(http.MethodGet)
 }
 
 // handleDebug provides a debug endpoint for testing when in debug mode
@@ -301,4 +318,9 @@ type responseWriter struct {
 func (rw *responseWriter) WriteHeader(code int) {
 	rw.statusCode = code
 	rw.ResponseWriter.WriteHeader(code)
+}
+
+// GetMemoryMonitor returns the server's memory monitor instance
+func (s *Server) GetMemoryMonitor() *monitoring.MemoryMonitor {
+	return s.memoryMonitor
 }
