@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"github.com/phillarmonic/syncopate-db/internal/settings"
 	"github.com/sirupsen/logrus"
 	"net/http"
@@ -598,4 +599,117 @@ func determineEnvironment() string {
 
 	// Default to production
 	return "production"
+}
+
+func (s *Server) handleUpdateEntityType(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	name := vars["name"]
+
+	// First check if the entity type exists
+	originalDef, err := s.engine.GetEntityDefinition(name)
+	if err != nil {
+		s.respondWithError(w, http.StatusNotFound, fmt.Sprintf("Entity type '%s' not found", name))
+		return
+	}
+
+	// Parse the updated definition
+	var updatedDef common.EntityDefinition
+	if err := json.NewDecoder(r.Body).Decode(&updatedDef); err != nil {
+		s.respondWithError(w, http.StatusBadRequest, "Invalid request payload")
+		return
+	}
+	defer r.Body.Close()
+
+	// Ensure the name in the payload matches the URL
+	if updatedDef.Name != name {
+		s.respondWithError(w, http.StatusBadRequest,
+			"Entity type name in payload doesn't match URL parameter")
+		return
+	}
+
+	// Prevent changing the ID generator - this is a design decision to avoid
+	// complex ID migration issues
+	if updatedDef.IDGenerator != "" && updatedDef.IDGenerator != originalDef.IDGenerator {
+		s.respondWithError(w, http.StatusBadRequest,
+			"Cannot change the ID generator after entity type creation")
+		return
+	}
+
+	// Include the original ID generator if not specified
+	if updatedDef.IDGenerator == "" {
+		updatedDef.IDGenerator = originalDef.IDGenerator
+	}
+
+	// Update the entity type
+	if err := s.engine.UpdateEntityType(updatedDef); err != nil {
+		s.respondWithError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Get the actual updated definition with any modifications applied
+	updatedDef, err = s.engine.GetEntityDefinition(name)
+	if err != nil {
+		s.respondWithError(w, http.StatusInternalServerError,
+			"Entity type updated but could not retrieve it")
+		return
+	}
+
+	// Provide a detailed response with information about the update
+	s.respondWithJSON(w, http.StatusOK, map[string]interface{}{
+		"message":    "Entity type updated successfully",
+		"entityType": updatedDef,
+	})
+}
+
+func (s *Server) handleDebugSchema(w http.ResponseWriter, r *http.Request) {
+	// Get entity type from query parameter
+	entityType := r.URL.Query().Get("type")
+
+	if entityType == "" {
+		// If no specific type requested, show all entity types
+		types := s.engine.ListEntityTypes()
+		schemas := make(map[string]interface{})
+
+		for _, typeName := range types {
+			def, err := s.engine.GetEntityDefinition(typeName)
+			if err != nil {
+				continue
+			}
+			schemas[typeName] = def
+		}
+
+		s.respondWithJSON(w, http.StatusOK, map[string]interface{}{
+			"entity_types": schemas,
+		}, true)
+		return
+	}
+
+	// Get definition for specific entity type
+	def, err := s.engine.GetEntityDefinition(entityType)
+	if err != nil {
+		s.respondWithError(w, http.StatusNotFound, fmt.Sprintf("Entity type '%s' not found", entityType))
+		return
+	}
+
+	// Show detailed schema information
+	fieldMap := make(map[string]map[string]interface{})
+	for _, field := range def.Fields {
+		fieldMap[field.Name] = map[string]interface{}{
+			"type":     field.Type,
+			"indexed":  field.Indexed,
+			"required": field.Required,
+			"nullable": field.Nullable,
+			"internal": field.Internal,
+		}
+	}
+
+	// Get count of entities with this type
+	count, _ := s.engine.GetEntityCount(entityType)
+
+	s.respondWithJSON(w, http.StatusOK, map[string]interface{}{
+		"entity_type":  def.Name,
+		"id_generator": def.IDGenerator,
+		"fields":       fieldMap,
+		"entity_count": count,
+	}, true)
 }

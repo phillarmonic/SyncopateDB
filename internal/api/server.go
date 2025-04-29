@@ -96,6 +96,7 @@ func (s *Server) setupRoutes() {
 	api.HandleFunc("/entity-types", s.handleGetEntityTypes).Methods(http.MethodGet)
 	api.HandleFunc("/entity-types", s.handleCreateEntityType).Methods(http.MethodPost)
 	api.HandleFunc("/entity-types/{name}", s.handleGetEntityType).Methods(http.MethodGet)
+	api.HandleFunc("/entity-types/{name}", s.handleUpdateEntityType).Methods(http.MethodPut) // New endpoint
 
 	// Entities
 	api.HandleFunc("/entities/{type}", s.handleListEntities).Methods(http.MethodGet)
@@ -113,8 +114,9 @@ func (s *Server) setupRoutes() {
 	// Add a debug endpoint if in debug mode
 	if s.config.DebugMode {
 		s.router.HandleFunc("/debug", s.handleDebug).Methods(http.MethodGet)
-		// Add our new entities debug endpoint
 		s.router.HandleFunc("/debug/entities", s.handleDebugEntities).Methods(http.MethodGet)
+		// Add a new debug endpoint for schema migrations
+		s.router.HandleFunc("/debug/schema", s.handleDebugSchema).Methods(http.MethodGet)
 	}
 }
 

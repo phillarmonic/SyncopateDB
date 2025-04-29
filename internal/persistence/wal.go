@@ -20,6 +20,7 @@ const (
 	OpInsertEntity
 	OpUpdateEntity
 	OpDeleteEntity
+	OpUpdateEntityType
 )
 
 // WALEntry represents a write-ahead log entry
@@ -334,28 +335,25 @@ func (pe *Engine) applyOperation(store common.DatastoreEngine, op int, entityTyp
 	case OpRegisterEntityType:
 		var def common.EntityDefinition
 		if err := gob.NewDecoder(bytes.NewBuffer(data)).Decode(&def); err != nil {
-			return err
+			return fmt.Errorf("failed to decode entity definition: %w", err)
 		}
 
-		// Check if the entity type already exists before trying to register it
+		// Check if the entity type already exists
 		existingDef, err := store.GetEntityDefinition(def.Name)
 		if err == nil {
 			// Entity type already exists, compare the definitions
 			if compareEntityDefinitions(existingDef, def) {
 				// Definitions are identical, skip registration
-				pe.logger.Debugf("Entity type %s already exists during WAL replay with identical definition, skipping registration", def.Name)
+				pe.logger.Debugf("Entity type %s already exists with identical definition, skipping", def.Name)
 				return nil
 			} else {
-				// Definitions are different, log a warning with details
-				pe.logger.Warnf("Entity type %s already exists during WAL replay with DIFFERENT definition. This may indicate a schema change that wasn't properly migrated.", def.Name)
-				pe.logger.Warnf("Existing fields: %v, New fields: %v", existingDef.Fields, def.Fields)
-				// Continue with existing definition - don't try to re-register
+				// Definitions are different, log a warning
+				pe.logger.Warnf("Entity type %s already exists with different definition, using existing definition", def.Name)
 				return nil
 			}
 		}
 
-		// When loading from persistence, we need to make sure internal fields
-		// are properly marked before validation
+		// Mark internal fields
 		for i := range def.Fields {
 			if strings.HasPrefix(def.Fields[i].Name, "_") {
 				def.Fields[i].Internal = true
@@ -363,6 +361,30 @@ func (pe *Engine) applyOperation(store common.DatastoreEngine, op int, entityTyp
 		}
 
 		return store.RegisterEntityType(def)
+
+	case OpUpdateEntityType:
+		var def common.EntityDefinition
+		if err := gob.NewDecoder(bytes.NewBuffer(data)).Decode(&def); err != nil {
+			return fmt.Errorf("failed to decode entity definition: %w", err)
+		}
+
+		// For WAL replays, we need to check if the entity type exists
+		_, err := store.GetEntityDefinition(def.Name)
+		if err != nil {
+			// Entity type doesn't exist, register it instead
+			return store.RegisterEntityType(def)
+		}
+
+		// Mark internal fields
+		for i := range def.Fields {
+			if strings.HasPrefix(def.Fields[i].Name, "_") {
+				def.Fields[i].Internal = true
+			}
+		}
+
+		// Update the entity type definition
+		return store.UpdateEntityType(def)
+
 	case OpInsertEntity:
 		var fields map[string]interface{}
 		if err := gob.NewDecoder(bytes.NewBuffer(data)).Decode(&fields); err != nil {
