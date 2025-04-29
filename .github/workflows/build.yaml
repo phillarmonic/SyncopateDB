@@ -63,7 +63,7 @@ jobs:
         run: |
           set -ex
           mkdir -p dist/${{ matrix.goos }}-${{ matrix.goarch }}
-          go build -ldflags "-s -w" -o dist/${{ matrix.goos }}-${{ matrix.goarch }}/syncopatedb-${{ matrix.goos }}-${{ matrix.goarch }}
+          go build -ldflags "-s -w" -o dist/${{ matrix.goos }}-${{ matrix.goarch }}/syncopatedb-${{ matrix.goos }}-${{ matrix.goarch }} cmd/main.go
 
       - name: Verify Binary is Statically Linked
         run: |
