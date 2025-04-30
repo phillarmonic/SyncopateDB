@@ -486,11 +486,9 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 			Fields: make(map[string]interface{}),
 		}
 
-		// Copy non-internal fields and preserve join fields
+		// Copy non-internal fields (those not starting with underscore)
 		for name, value := range entity.Fields {
-			// Keep all fields that don't start with underscore OR
-			// fields that match join aliases in the query
-			if !strings.HasPrefix(name, "_") || s.isJoinField(name, queryOpts.Joins) {
+			if !strings.HasPrefix(name, "_") {
 				filteredEntity.Fields[name] = value
 			}
 		}

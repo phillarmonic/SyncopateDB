@@ -23,7 +23,8 @@ func (s *Server) handleNestedQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	response, err := s.queryService.ExecutePaginatedQuery(queryOpts)
+	// Use the new function that properly handles joins without modifying original entities
+	response, err := s.queryService.ExecuteQueryWithJoins(queryOpts)
 	if err != nil {
 		s.respondWithError(w, http.StatusBadRequest, err.Error())
 		return

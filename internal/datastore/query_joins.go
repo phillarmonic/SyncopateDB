@@ -122,8 +122,9 @@ func (qs *QueryService) executeJoin(entities []common.Entity, join JoinOptions) 
 		join.SelectStrategy = "first"
 	}
 
+	// FIX: Correctly format log message with all parameters
 	logDebug("Starting join: %s -> %s (local: %s, foreign: %s, as: %s)",
-		join.EntityType, join.ForeignField, join.LocalField, join.As)
+		join.EntityType, join.ForeignField, join.LocalField, join.ForeignField, join.As)
 
 	// Execute a query to get the target entities
 	targetOpts := QueryOptions{
@@ -163,19 +164,40 @@ func (qs *QueryService) executeJoin(entities []common.Entity, join JoinOptions) 
 
 	logDebug("Built target map with %d unique keys", len(targetMap))
 
+	// Create a temporary map to hold join results
+	joinResults := make([]map[string]interface{}, len(entities))
+	excludedEntities := make([]bool, len(entities))
+
 	// Process each main entity
 	matchCount := 0
 	noValueCount := 0
 	noMatchCount := 0
 
 	for i := range entities {
-		localValue, exists := entities[i].Fields[join.LocalField]
+		// Initialize the join results map for this entity
+		joinResults[i] = make(map[string]interface{})
+
+		// FIX: The issue is here - we need to check the ID field of the entity directly
+		// Since the error showed LocalField "id" was not found
+		var localValue interface{}
+		var exists bool
+
+		// If LocalField is "id", use the entity.ID directly instead of looking in Fields
+		if join.LocalField == "id" {
+			localValue = entities[i].ID
+			exists = true
+			logDebug("Using entity ID directly for local field: %s", localValue)
+		} else {
+			// Otherwise look in the Fields map as before
+			localValue, exists = entities[i].Fields[join.LocalField]
+		}
+
 		if !exists {
 			logDebug("Local field %s not found in entity %s", join.LocalField, entities[i].ID)
 			noValueCount++
 			if join.Type == "inner" {
-				// For inner joins, remove entities that don't have the join field
-				entities[i].Fields["_excluded"] = true
+				// For inner joins, mark entities that don't have the join field for exclusion
+				excludedEntities[i] = true
 				logDebug("Marking entity %s for exclusion (inner join, missing local field)", entities[i].ID)
 			}
 			continue
@@ -197,8 +219,8 @@ func (qs *QueryService) executeJoin(entities []common.Entity, join JoinOptions) 
 				entities[i].ID, normalizedLocalValue)
 			noMatchCount++
 			if join.Type == "inner" {
-				// For inner joins, remove entities that don't have matches
-				entities[i].Fields["_excluded"] = true
+				// For inner joins, mark entities that don't have matches for exclusion
+				excludedEntities[i] = true
 				logDebug("Marking entity %s for exclusion (inner join, no matches)", entities[i].ID)
 			}
 			continue
@@ -213,7 +235,7 @@ func (qs *QueryService) executeJoin(entities []common.Entity, join JoinOptions) 
 		case "first":
 			// Just select the first match
 			logDebug("Using 'first' strategy: selecting first match for entity %s", entities[i].ID)
-			entities[i].Fields[join.As] = qs.filterJoinFields(matches[0], join.IncludeFields, join.ExcludeFields)
+			joinResults[i][join.As] = qs.filterJoinFields(matches[0], join.IncludeFields, join.ExcludeFields)
 		case "all":
 			// Select all matches
 			logDebug("Using 'all' strategy: selecting all %d matches for entity %s", len(matches), entities[i].ID)
@@ -221,28 +243,76 @@ func (qs *QueryService) executeJoin(entities []common.Entity, join JoinOptions) 
 			for j, match := range matches {
 				joinedEntities[j] = qs.filterJoinFields(match, join.IncludeFields, join.ExcludeFields)
 			}
-			entities[i].Fields[join.As] = joinedEntities
+			joinResults[i][join.As] = joinedEntities
 		}
 	}
 
 	logDebug("Join summary: %d entities processed, %d matches found, %d with no local value, %d with no matches",
 		len(entities), matchCount, noValueCount, noMatchCount)
 
-	// For inner joins, remove the excluded entities
+	// For inner joins, create a new filtered list
 	if join.Type == "inner" {
 		initialCount := len(entities)
-		filteredEntities := make([]common.Entity, 0, len(entities))
-		for _, entity := range entities {
-			if _, excluded := entity.Fields["_excluded"]; !excluded {
-				filteredEntities = append(filteredEntities, entity)
+		finalEntities := make([]common.Entity, 0, len(entities))
+		finalJoinResults := make([]map[string]interface{}, 0, len(entities))
+
+		for i, entity := range entities {
+			if !excludedEntities[i] {
+				// Create a deep copy of the entity to avoid modifying the original
+				entityCopy := common.Entity{
+					ID:     entity.ID,
+					Type:   entity.Type,
+					Fields: make(map[string]interface{}),
+				}
+
+				// Copy all fields
+				for k, v := range entity.Fields {
+					entityCopy.Fields[k] = v
+				}
+
+				// Now add join data to our copy
+				for k, v := range joinResults[i] {
+					entityCopy.Fields[k] = v
+				}
+
+				finalEntities = append(finalEntities, entityCopy)
+				finalJoinResults = append(finalJoinResults, joinResults[i])
 			}
 		}
-		// Update the original slice (possible because we're modifying the original slice)
-		copy(entities, filteredEntities)
+
+		// Update the original slice with our filtered copies
+		copy(entities, finalEntities)
+
 		// Truncate the slice to the new length
-		finalCount := len(filteredEntities)
-		entities = entities[:finalCount]
+		finalCount := len(finalEntities)
+		if finalCount < len(entities) {
+			entities = entities[:finalCount]
+		}
+
 		logDebug("Inner join: filtered from %d to %d entities", initialCount, finalCount)
+	} else {
+		// For outer joins, apply the join results to copies of the original entities
+		for i := range entities {
+			// Create a deep copy of the entity
+			entityCopy := common.Entity{
+				ID:     entities[i].ID,
+				Type:   entities[i].Type,
+				Fields: make(map[string]interface{}),
+			}
+
+			// Copy all fields
+			for k, v := range entities[i].Fields {
+				entityCopy.Fields[k] = v
+			}
+
+			// Add join data to our copy
+			for k, v := range joinResults[i] {
+				entityCopy.Fields[k] = v
+			}
+
+			// Replace the original entity with our modified copy
+			entities[i] = entityCopy
+		}
 	}
 
 	return nil
