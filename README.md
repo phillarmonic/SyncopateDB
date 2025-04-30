@@ -76,7 +76,7 @@ go build ./cmd/main.go
    - `--cache-size`: Number of entities to cache in memory (default: 10000)
    - `--snapshot-interval`: Snapshot interval in seconds (default: 600)
    - `--sync-writes`: Sync writes to disk immediately (default: true)
-   - `--debug`: Enable debug mode for easier debugging
+   - `--debug`: Enable **verbose debug mode** for easier debugging
    - `--color-logs`: Enable colorized log output
 
 3. Visit `http://localhost:8080/` to see the welcome message and verify the server is running.
@@ -118,13 +118,14 @@ SyncopateDB supports advanced querying with filtering, sorting, and pagination.
 
 SyncopateDB supports joining related data between entity types.
 
-| Method | Endpoint           | Description                      |
-| ------ | ------------------ | -------------------------------- |
-| POST   | /api/v1/query/join | Execute a query with joins       |
+| Method | Endpoint           | Description                |
+| ------ | ------------------ | -------------------------- |
+| POST   | /api/v1/query/join | Execute a query with joins |
 
 ## Examples
 
 ### Creating Entity Types
+
 Pro tip: If you want to use auto_increment, you can omit it from the payload and it'll be automatically selected.
 
 Create a "Product" entity type with auto-increment IDs:
@@ -631,7 +632,7 @@ SyncopateDB can be configured through environment variables and command-line fla
 ### Environment Variables
 
 - `PORT`: Server port (default: 8080)
-- `DEBUG`: Enable debug mode (default: false)
+- `DEBUG`: Enable **verbose  debug mode** (default: false)
 - `LOG_LEVEL`: Logging level (debug, info, warn, error)
 - `ENABLE_WAL`: Enable Write-Ahead Logging (default: true)
 - `ENABLE_ZSTD`: Enable ZSTD compression (default: false)
@@ -645,7 +646,7 @@ SyncopateDB can be configured through environment variables and command-line fla
 - `--cache-size`: Number of entities to cache in memory
 - `--snapshot-interval`: Snapshot interval in seconds
 - `--sync-writes`: Sync writes to disk immediately
-- `--debug`: Enable debug mode
+- `--debug`: Enable the **verbose debug mode**
 - `--color-logs`: Enable colorized logs
 
 ## Persistence
