@@ -479,8 +479,22 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 	// Filter internal fields from response data and convert IDs
 	filteredData := make([]interface{}, len(response.Data))
 	for i, entity := range response.Data {
-		// Filter internal fields first
-		filteredEntity := s.filterInternalFields(entity)
+		// Create a filtered copy of the entity
+		filteredEntity := common.Entity{
+			ID:     entity.ID,
+			Type:   entity.Type,
+			Fields: make(map[string]interface{}),
+		}
+
+		// Copy non-internal fields and preserve join fields
+		for name, value := range entity.Fields {
+			// Keep all fields that don't start with underscore OR
+			// fields that match join aliases in the query
+			if !strings.HasPrefix(name, "_") || s.isJoinField(name, queryOpts.Joins) {
+				filteredEntity.Fields[name] = value
+			}
+		}
+
 		// Then convert to representation with proper ID type
 		filteredData[i] = common.ConvertToRepresentation(filteredEntity, def.IDGenerator)
 	}

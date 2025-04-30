@@ -2,6 +2,7 @@ package datastore
 
 import (
 	"errors"
+	"fmt"
 	"reflect"
 	"sort"
 	"strings"
@@ -27,9 +28,12 @@ func (qs *QueryService) Query(options QueryOptions) ([]common.Entity, error) {
 	qs.engine.mu.RLock()
 	defer qs.engine.mu.RUnlock()
 
-	// Verify entity type
-	if _, exists := qs.engine.definitions[options.EntityType]; !exists {
-		return nil, errors.New("entity type not registered")
+	// Get the entity type name from the options
+	entityTypeName := options.EntityType
+
+	// Verify an entity type exists
+	if _, exists := qs.engine.definitions[entityTypeName]; !exists {
+		return nil, fmt.Errorf("entity type '%s' not registered", entityTypeName)
 	}
 
 	// Start with all entities of the specified type
@@ -628,18 +632,37 @@ func (qs *QueryService) ExecutePaginatedQuery(options QueryOptions) (*PaginatedR
 		return nil, err
 	}
 
-	// Total filtered count is the number of matches after all filters are applied
-	totalFilteredCount := len(allMatchingResults)
-
-	// Now execute the actual query with pagination
-	results, err := qs.Query(options)
-	if err != nil {
-		return nil, err
+	// Process joins if any
+	if len(options.Joins) > 0 {
+		for _, join := range options.Joins {
+			if err := qs.executeJoin(allMatchingResults, join); err != nil {
+				return nil, fmt.Errorf("join error: %w", err)
+			}
+		}
 	}
+
+	// Apply offset and limit after joins for accurate pagination
+	startIndex := options.Offset
+	if startIndex > len(allMatchingResults) {
+		startIndex = len(allMatchingResults)
+	}
+
+	endIndex := len(allMatchingResults)
+	if options.Limit > 0 && startIndex+options.Limit < endIndex {
+		endIndex = startIndex + options.Limit
+	}
+
+	results := allMatchingResults
+	if startIndex > 0 || endIndex < len(allMatchingResults) {
+		results = allMatchingResults[startIndex:endIndex]
+	}
+
+	// Total filtered count is the number of matches after all filters and joins are applied
+	totalFilteredCount := len(allMatchingResults)
 
 	return &PaginatedResponse{
 		Data:       results,
-		Total:      totalFilteredCount, // Use filtered count instead of total entity count
+		Total:      totalFilteredCount,
 		Count:      len(results),
 		Limit:      options.Limit,
 		Offset:     options.Offset,

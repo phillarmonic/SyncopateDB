@@ -41,6 +41,7 @@ type QueryOptions struct {
 	OrderBy    string              `json:"orderBy"`
 	OrderDesc  bool                `json:"orderDesc"`
 	FuzzyOpts  *FuzzySearchOptions `json:"fuzzyOpts,omitempty"`
+	Joins      []JoinOptions       `json:"joins"`
 }
 
 // QueryFilter represents a filter condition
@@ -65,4 +66,16 @@ type PaginatedResponse struct {
 	HasMore    bool            `json:"hasMore"`
 	EntityType string          `json:"entityType"`
 	Data       []common.Entity `json:"data"`
+}
+
+type JoinOptions struct {
+	EntityType     string        `json:"entityType"`     // The entity type to join with
+	LocalField     string        `json:"localField"`     // Field in the main entity
+	ForeignField   string        `json:"foreignField"`   // Field in the joined entity
+	As             string        `json:"as"`             // Alias for the joined data
+	Filters        []QueryFilter `json:"filters"`        // Optional filters on the joined entity
+	IncludeFields  []string      `json:"includeFields"`  // Fields to include (empty = all)
+	ExcludeFields  []string      `json:"excludeFields"`  // Fields to exclude
+	Type           string        `json:"type"`           // Join type: "inner", "left"
+	SelectStrategy string        `json:"selectStrategy"` // "first", "all"
 }
