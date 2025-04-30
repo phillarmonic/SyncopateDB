@@ -116,7 +116,7 @@ SyncopateDB supports advanced querying with filtering, sorting, and pagination.
 
 ### Joins
 
-SyncopateDB supports joining related data between entity types.
+SyncopateDB supports joining related data between entity types. In SyncopateDB, joins are non-destructive views made in memory to represent data. This means the source entities are never modified by the join operation.
 
 | Method | Endpoint           | Description                |
 | ------ | ------------------ | -------------------------- |
@@ -648,6 +648,10 @@ SyncopateDB can be configured through environment variables and command-line fla
 - `--sync-writes`: Sync writes to disk immediately
 - `--debug`: Enable the **verbose debug mode**
 - `--color-logs`: Enable colorized logs
+
+## The verbose debug mode
+
+This mode might show extra information useful for debugging edge cases. When having support for this software, you might be asked of a run with the verbose mode enabled.
 
 ## Persistence
 
