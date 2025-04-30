@@ -15,6 +15,7 @@ SyncopateDB is a flexible, lightweight, optimized for SSD data store with advanc
   - [Entity Types](#entity-types)
   - [Entities](#entities)
   - [Querying](#querying)
+  - [Joins](#joins)
 - [Examples](#examples)
   - [Creating Entity Types](#creating-entity-types)
   - [Updating Entity Types](#updating-entity-types)
@@ -24,6 +25,7 @@ SyncopateDB is a flexible, lightweight, optimized for SSD data store with advanc
   - [Updating Entities](#updating-entities)
   - [Deleting Entities](#deleting-entities)
   - [Advanced Querying](#advanced-querying)
+  - [Using Joins](#using-joins)
 - [ID Generation Strategies](#id-generation-strategies)
 - [Configuration](#configuration)
 - [Persistence](#persistence)
@@ -35,6 +37,7 @@ SyncopateDB is a flexible, lightweight, optimized for SSD data store with advanc
 - **Indexing**: Create indexes for fast data retrieval
 - **Multiple ID Strategies**: Support for auto-increment, UUID, CUID generation
 - **Advanced Querying**: Filter, sort, and paginate data with a flexible query API
+- **Joins and Relations**: Link related data between entity types
 - **Fuzzy Search**: Find data using fuzzy matching algorithms
 - **Array Operations**: Query for values within arrays
 - **Transaction Support**: Group operations for atomic changes
@@ -110,6 +113,14 @@ SyncopateDB supports advanced querying with filtering, sorting, and pagination.
 | Method | Endpoint      | Description             |
 | ------ | ------------- | ----------------------- |
 | POST   | /api/v1/query | Execute a complex query |
+
+### Joins
+
+SyncopateDB supports joining related data between entity types.
+
+| Method | Endpoint           | Description                      |
+| ------ | ------------------ | -------------------------------- |
+| POST   | /api/v1/query/join | Execute a query with joins       |
 
 ## Examples
 
@@ -437,6 +448,162 @@ curl -X POST http://localhost:8080/api/v1/query \
     "offset": 0
   }'
 ```
+
+### Using Joins
+
+SyncopateDB supports powerful join capabilities for querying related data across entity types. This is particularly useful for modeling relationships like one-to-many and many-to-many.
+
+#### One-to-Many Relationship Example
+
+Let's set up a blog with users, posts, and comments:
+
+First, create the required entity types:
+
+```bash
+# Create users entity type
+curl -X POST http://localhost:8080/api/v1/entity-types \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "users",
+    "fields": [
+      {"name": "name", "type": "string", "required": true},
+      {"name": "email", "type": "string", "required": true, "indexed": true},
+      {"name": "active", "type": "boolean", "indexed": true}
+    ],
+    "idGenerator": "auto_increment"
+  }'
+
+# Create posts entity type
+curl -X POST http://localhost:8080/api/v1/entity-types \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "posts",
+    "fields": [
+      {"name": "title", "type": "string", "required": true},
+      {"name": "content", "type": "string", "required": true},
+      {"name": "author_id", "type": "integer", "required": true, "indexed": true},
+      {"name": "category_id", "type": "integer", "indexed": true},
+      {"name": "published", "type": "boolean", "indexed": true}
+    ],
+    "idGenerator": "auto_increment"
+  }'
+
+# Create comments entity type
+curl -X POST http://localhost:8080/api/v1/entity-types \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "comments",
+    "fields": [
+      {"name": "content", "type": "string", "required": true},
+      {"name": "post_id", "type": "integer", "required": true, "indexed": true},
+      {"name": "user_id", "type": "integer", "required": true, "indexed": true}
+    ],
+    "idGenerator": "auto_increment"
+  }'
+```
+
+#### Join Posts with Authors
+
+To fetch posts with their author information:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/query/join \
+  -H "Content-Type: application/json" \
+  -d '{
+    "entityType": "posts",
+    "joins": [
+      {
+        "entityType": "users",
+        "localField": "author_id",
+        "foreignField": "id",
+        "as": "author",
+        "type": "inner",
+        "selectStrategy": "first"
+      }
+    ]
+  }'
+```
+
+This query will return all posts with the author information embedded in each post.
+
+#### Join Posts with Comments
+
+To fetch posts along with all their comments:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/query/join \
+  -H "Content-Type: application/json" \
+  -d '{
+    "entityType": "posts",
+    "joins": [
+      {
+        "entityType": "comments",
+        "localField": "id",
+        "foreignField": "post_id",
+        "as": "comments",
+        "type": "left",
+        "selectStrategy": "all"
+      }
+    ]
+  }'
+```
+
+#### Multiple Joins
+
+You can combine multiple joins in a single query:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/query/join \
+  -H "Content-Type: application/json" \
+  -d '{
+    "entityType": "posts",
+    "joins": [
+      {
+        "entityType": "users",
+        "localField": "author_id",
+        "foreignField": "id",
+        "as": "author",
+        "type": "inner",
+        "selectStrategy": "first"
+      },
+      {
+        "entityType": "comments",
+        "localField": "id",
+        "foreignField": "post_id",
+        "as": "comments",
+        "type": "left",
+        "selectStrategy": "all"
+      }
+    ],
+    "filters": [
+      {
+        "field": "published",
+        "operator": "eq",
+        "value": true
+      }
+    ],
+    "limit": 10,
+    "offset": 0
+  }'
+```
+
+This query will return published posts with both author information and all comments.
+
+#### Join Parameters
+
+- **entityType**: The entity type to join with
+- **localField**: Field in the main entity to join on
+- **foreignField**: Field in the joined entity to match against
+- **as**: Name to give the joined data in the result
+- **type**: Join type (options: "inner" or "left")
+  - "inner": Only returns main entities that have matching joined entities
+  - "left": Returns all main entities, with joined data where available
+- **selectStrategy**: How to handle multiple matching entities (options: "first" or "all")
+  - "first": Select only the first matching entity
+  - "all": Select all matching entities as an array
+- **filters**: Optional filters to apply to the joined entities
+- **includeFields**: Fields to include from the joined entities (empty = all)
+- **excludeFields**: Fields to exclude from the joined entities
 
 ## ID Generation Strategies
 
