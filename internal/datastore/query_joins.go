@@ -3,7 +3,7 @@ package datastore
 import (
 	"fmt"
 	"github.com/phillarmonic/syncopate-db/internal/common"
-	"github.com/sirupsen/logrus"
+	"github.com/phillarmonic/syncopate-db/internal/settings"
 	"regexp"
 	"strconv"
 	"strings"
@@ -12,10 +12,9 @@ import (
 // normalizeForJoinComparison normalizes values for consistent comparison in joins
 // This helps avoid type mismatches between string IDs and numeric values
 func (qs *QueryService) normalizeForJoinComparison(value interface{}) interface{} {
-	// Simple debug logging for development
-	debugEnabled := false // Set to true to enable logs
+	// Debug logging that respects global settings
 	debug := func(format string, args ...interface{}) {
-		if debugEnabled {
+		if settings.Config.Debug {
 			fmt.Printf("[JOIN DEBUG] "+format+"\n", args...)
 		}
 	}
@@ -95,21 +94,12 @@ func (qs *QueryService) normalizeForJoinComparison(value interface{}) interface{
 
 // executeJoin performs a join operation between the main entities and a target entity type
 func (qs *QueryService) executeJoin(entities []common.Entity, join JoinOptions) error {
-	// Use direct debug logging
-	var logger *logrus.Logger
-
-	// We can create a new logger for debugging
-	logger = logrus.New()
-	logger.SetLevel(logrus.DebugLevel)
-
-	// Optionally set a specific formatter for debugging
-	logger.SetFormatter(&logrus.TextFormatter{
-		FullTimestamp: true,
-	})
-
-	// Log debugging info if we have a logger
+	// Use proper debug logging that respects the global debug setting
 	logDebug := func(format string, args ...interface{}) {
-		fmt.Printf("[JOIN DEBUG] "+format+"\n", args...)
+		// Only log if debug mode is enabled in settings
+		if settings.Config.Debug {
+			fmt.Printf("[JOIN DEBUG] "+format+"\n", args...)
+		}
 	}
 
 	// The default join type is inner if not specified
@@ -122,9 +112,8 @@ func (qs *QueryService) executeJoin(entities []common.Entity, join JoinOptions) 
 		join.SelectStrategy = "first"
 	}
 
-	// FIX: Correctly format log message with all parameters
 	logDebug("Starting join: %s -> %s (local: %s, foreign: %s, as: %s)",
-		join.EntityType, join.ForeignField, join.LocalField, join.ForeignField, join.As)
+		join.EntityType, join.ForeignField, join.LocalField, join.As)
 
 	// Execute a query to get the target entities
 	targetOpts := QueryOptions{
@@ -177,21 +166,7 @@ func (qs *QueryService) executeJoin(entities []common.Entity, join JoinOptions) 
 		// Initialize the join results map for this entity
 		joinResults[i] = make(map[string]interface{})
 
-		// FIX: The issue is here - we need to check the ID field of the entity directly
-		// Since the error showed LocalField "id" was not found
-		var localValue interface{}
-		var exists bool
-
-		// If LocalField is "id", use the entity.ID directly instead of looking in Fields
-		if join.LocalField == "id" {
-			localValue = entities[i].ID
-			exists = true
-			logDebug("Using entity ID directly for local field: %s", localValue)
-		} else {
-			// Otherwise look in the Fields map as before
-			localValue, exists = entities[i].Fields[join.LocalField]
-		}
-
+		localValue, exists := entities[i].Fields[join.LocalField]
 		if !exists {
 			logDebug("Local field %s not found in entity %s", join.LocalField, entities[i].ID)
 			noValueCount++

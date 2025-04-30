@@ -327,7 +327,7 @@ func (s *Server) GetMemoryMonitor() *monitoring.MemoryMonitor {
 }
 
 func (s *Server) logJoinDebug(message string, fields ...interface{}) {
-	if s.config.DebugMode {
+	if settings.Config.Debug {
 		s.logger.WithField("component", "join_debug").Debugf(message, fields...)
 	}
 }
