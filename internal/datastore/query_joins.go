@@ -140,7 +140,7 @@ func (qs *QueryService) executeJoin(entities []common.Entity, join JoinOptions) 
 				foreignValue = entity.ID
 				logDebug("Using entity ID as foreign field for entity %s", entity.ID)
 			} else {
-				logDebug("Foreign field %s not found in entity %s", join.ForeignField, entity.ID)
+				logDebug("Foreign field '%s' not found in entity %s", join.ForeignField, entity.ID)
 				continue
 			}
 		}
@@ -168,7 +168,7 @@ func (qs *QueryService) executeJoin(entities []common.Entity, join JoinOptions) 
 
 		localValue, exists := entities[i].Fields[join.LocalField]
 		if !exists {
-			logDebug("Local field %s not found in entity %s", join.LocalField, entities[i].ID)
+			logDebug("Local field '%s' not found in entity %s", join.LocalField, entities[i].ID)
 			noValueCount++
 			if join.Type == "inner" {
 				// For inner joins, mark entities that don't have the join field for exclusion
@@ -179,7 +179,7 @@ func (qs *QueryService) executeJoin(entities []common.Entity, join JoinOptions) 
 		}
 
 		// Debug the local value
-		logDebug("Entity %s has local value %v (type: %T) for field %s",
+		logDebug("Entity '%s' has local value '%v' (type: %T) for field '%s'",
 			entities[i].ID, localValue, localValue, join.LocalField)
 
 		// Normalize the local value for consistent comparison

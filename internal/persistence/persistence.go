@@ -771,7 +771,7 @@ func (pe *Engine) applyOperationWithErrorHandling(store common.DatastoreEngine, 
 		_, err := store.Get(entityID)
 		if err == nil {
 			// Entity already exists, skip insertion
-			pe.logger.Debugf("Entity %s already exists, skipping insertion", entityID)
+			pe.logger.Debugf("Entity '%s' already exists, skipping insertion", entityID)
 			return nil
 		}
 
@@ -787,7 +787,7 @@ func (pe *Engine) applyOperationWithErrorHandling(store common.DatastoreEngine, 
 		_, err := store.Get(entityID)
 		if err != nil {
 			// Entity doesn't exist, skip update
-			pe.logger.Warnf("Entity %s doesn't exist, skipping update", entityID)
+			pe.logger.Warnf("Entity '%s' doesn't exist, skipping update", entityID)
 			return nil
 		}
 
@@ -798,7 +798,7 @@ func (pe *Engine) applyOperationWithErrorHandling(store common.DatastoreEngine, 
 		_, err := store.Get(entityID)
 		if err != nil {
 			// Entity doesn't exist, skip deletion
-			pe.logger.Warnf("Entity %s doesn't exist, skipping deletion", entityID)
+			pe.logger.Warnf("Entity '%s' doesn't exist, skipping deletion", entityID)
 			return nil
 		}
 
