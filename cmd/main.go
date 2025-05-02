@@ -18,6 +18,11 @@ import (
 )
 
 func main() {
+	fmt.Println("SyncopateDB - Off-beat by design. On point by performance.")
+	fmt.Println("High performance, SSD-optimized DB")
+	fmt.Println(fmt.Sprintf("Version: %s", about.About().Version))
+	fmt.Println("")
+
 	// Parse command-line flags (will override environment variables)
 	port := flag.Int("port", settings.Config.Port, "Port to listen on")
 	logLevel := flag.String("log-level", string(settings.Config.LogLevel), "Log level (debug, info, warn, error)")
@@ -41,11 +46,6 @@ func main() {
 	settings.Config.LogLevel = settings.LogLevel(*logLevel)
 	settings.Config.Debug = *debugMode
 	settings.Config.ColorizedLogs = *colorLogs
-
-	fmt.Println("SyncopateDB - Off-beat by design. On point by performance.")
-	fmt.Println("High performance, SSD-optimized DB")
-	fmt.Println(fmt.Sprintf("Version: %s", about.About().Version))
-	fmt.Println("")
 
 	// Set up logging
 	logger := logrus.New()
