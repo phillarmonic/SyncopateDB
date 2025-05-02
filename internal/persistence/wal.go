@@ -397,7 +397,8 @@ func (pe *Engine) applyOperation(store common.DatastoreEngine, op int, entityTyp
 		if err := gob.NewDecoder(bytes.NewBuffer(data)).Decode(&fields); err != nil {
 			return err
 		}
-		return store.Update(entityID, fields)
+		// We already have entityType as a parameter to this function
+		return store.Update(entityType, entityID, fields)
 
 	case OpDeleteEntity:
 		return store.Delete(entityID)

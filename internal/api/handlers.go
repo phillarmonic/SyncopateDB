@@ -342,8 +342,8 @@ func (s *Server) handleUpdateEntity(w http.ResponseWriter, r *http.Request) {
 		}).Debug("Updating entity")
 	}
 
-	// Use the normalized ID for the update operation
-	if err := s.engine.Update(normalizedID, updateData.Fields); err != nil {
+	// Use the new type-safe Update method
+	if err := s.engine.Update(entityType, normalizedID, updateData.Fields); err != nil {
 		s.respondWithError(w, http.StatusBadRequest, err.Error())
 		return
 	}

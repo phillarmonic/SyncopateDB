@@ -349,24 +349,20 @@ func (dse *Engine) Insert(entityType string, id string, data map[string]interfac
 }
 
 // Update updates an existing entity in the data store engine
-func (dse *Engine) Update(id string, data map[string]interface{}) error {
+func (dse *Engine) Update(entityType string, id string, data map[string]interface{}) error {
 	// First, read the current state without write lock
 	dse.mu.RLock()
 
-	// Find the entity by iterating through the map (backward compatibility)
-	var entity common.Entity
-	var entityKey string
-	var exists bool
+	// Try to find the entity using the composite key format
+	entityKey := createEntityKey(entityType, id)
+	entity, exists := dse.entities[entityKey]
 
-	// First try to find by direct ID (backward compatibility)
-	entity, exists = dse.entities[id]
-	if exists {
-		entityKey = id
-	} else {
-		// If not found, check for composite keys
+	// If not found by composite key, try backward compatibility approach
+	if !exists {
+		// Try to find an entity with matching ID and type through iteration
 		for key, e := range dse.entities {
 			_, entityID := parseEntityKey(key)
-			if entityID == id {
+			if entityID == id && e.Type == entityType {
 				entity = e
 				entityKey = key
 				exists = true
@@ -377,7 +373,7 @@ func (dse *Engine) Update(id string, data map[string]interface{}) error {
 
 	if !exists {
 		dse.mu.RUnlock()
-		return fmt.Errorf("entity with ID %s not found", id)
+		return fmt.Errorf("entity with ID %s and type %s not found", id, entityType)
 	}
 
 	// Update internal fields
@@ -386,8 +382,8 @@ func (dse *Engine) Update(id string, data map[string]interface{}) error {
 	// Ensure _created_at is not modified
 	delete(data, "_created_at")
 
-	// Validate the update data using the new function
-	if err := dse.validateUpdateData(entity.Type, data); err != nil {
+	// Validate the update data against the correct entity type
+	if err := dse.validateUpdateData(entityType, data); err != nil {
 		dse.mu.RUnlock()
 		return err
 	}
@@ -408,11 +404,11 @@ func (dse *Engine) Update(id string, data map[string]interface{}) error {
 	// Now acquire write lock for the update
 	dse.mu.Lock()
 
-	// Check again if the entity exists
+	// Check again if the entity exists under write lock
 	entity, exists = dse.entities[entityKey]
 	if !exists {
 		dse.mu.Unlock()
-		return fmt.Errorf("entity with ID %s not found", id)
+		return fmt.Errorf("entity with ID %s and type %s not found", id, entityType)
 	}
 
 	// Remove old index entries
@@ -427,13 +423,13 @@ func (dse *Engine) Update(id string, data map[string]interface{}) error {
 	// Add new index entries
 	dse.updateIndices(entity, true)
 
-	// Store reference to persistence provider and entity type
+	// Store reference to persistence provider
 	persistenceProvider := dse.persistence
 	dse.mu.Unlock()
 
 	// Persist update if persistence is enabled
 	if persistenceProvider != nil {
-		if err := persistenceProvider.Update(dse, id, data); err != nil {
+		if err := persistenceProvider.Update(dse, entityType, id, data); err != nil {
 			// Rollback in-memory state on error
 			dse.mu.Lock()
 			// Remove updated indices

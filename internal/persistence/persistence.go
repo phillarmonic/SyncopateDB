@@ -425,13 +425,7 @@ func (pe *Engine) Insert(store common.DatastoreEngine, entityType, entityID stri
 }
 
 // Update updates an entity and persists the changes
-func (pe *Engine) Update(store common.DatastoreEngine, entityID string, data map[string]interface{}) error {
-	// Get the entity to determine its type
-	entity, err := store.Get(entityID)
-	if err != nil {
-		return err
-	}
-
+func (pe *Engine) Update(store common.DatastoreEngine, entityType string, entityID string, data map[string]interface{}) error {
 	// Serialize the update data outside of any locks
 	var buf bytes.Buffer
 	if err := gob.NewEncoder(&buf).Encode(data); err != nil {
@@ -440,14 +434,14 @@ func (pe *Engine) Update(store common.DatastoreEngine, entityID string, data map
 
 	// If WAL is disabled, update directly in the database
 	if !settings.Config.EnableWAL {
-		key := fmt.Sprintf("entity:%s:%s", entity.Type, entityID)
+		key := fmt.Sprintf("entity:%s:%s", entityType, entityID)
 		return pe.db.Update(func(txn *badger.Txn) error {
 			return txn.Set([]byte(key), pe.Compress(buf.Bytes()))
 		})
 	}
 
 	// Write to WAL
-	return pe.WriteWALEntry(OpUpdateEntity, entity.Type, entityID, buf.Bytes())
+	return pe.WriteWALEntry(OpUpdateEntity, entityType, entityID, buf.Bytes())
 }
 
 // Delete removes an entity and persists the deletion
@@ -784,14 +778,15 @@ func (pe *Engine) applyOperationWithErrorHandling(store common.DatastoreEngine, 
 		}
 
 		// Check if entity exists before updating
-		_, err := store.Get(entityID)
+		entity, err := store.Get(entityID)
 		if err != nil {
 			// Entity doesn't exist, skip update
 			pe.logger.Warnf("Entity '%s' doesn't exist, skipping update", entityID)
 			return nil
 		}
 
-		return store.Update(entityID, fields)
+		// Pass the entity type from the entity we retrieved
+		return store.Update(entity.Type, entityID, fields)
 
 	case OpDeleteEntity:
 		// Check if entity exists before deleting
