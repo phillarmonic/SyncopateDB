@@ -6,6 +6,17 @@ on:
       - 'v*.*.*'
   pull_request:
     types: [ opened, synchronize, reopened ]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version for the build (without the v prefix)'
+        required: true
+        default: '0.0.1'
+      publish_docker:
+        description: 'Publish Docker images'
+        required: true
+        type: boolean
+        default: false
 jobs:
   build:
     runs-on: ubuntu-24.04
@@ -18,6 +29,20 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Extract version information
+        id: get_version
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "VERSION=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+            echo "Using manually specified version: ${{ github.event.inputs.version }}"
+          elif [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+            echo "Using version from tag: ${GITHUB_REF#refs/tags/v}"
+          else
+            echo "VERSION=dev-$(date +%Y%m%d%H%M%S)" >> $GITHUB_OUTPUT
+            echo "Using development version: dev-$(date +%Y%m%d%H%M%S)"
+          fi
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -49,8 +74,9 @@ jobs:
           CGO_ENABLED: 0
         run: |
           set -ex
+          VERSION="${{ steps.get_version.outputs.VERSION }}"
           mkdir -p dist/${{ matrix.goos }}-${{ matrix.goarch }}
-          go build -ldflags "-s -w" -o dist/${{ matrix.goos }}-${{ matrix.goarch }}/syncopatedb-${{ matrix.goos }}-${{ matrix.goarch }} cmd/main.go
+          go build -ldflags "-s -w -X main.Version=$VERSION" -o dist/${{ matrix.goos }}-${{ matrix.goarch }}/syncopatedb-${{ matrix.goos }}-${{ matrix.goarch }} cmd/main.go
 
       - name: Verify Binary is Statically Linked
         run: |
@@ -102,6 +128,15 @@ jobs:
           upx -t "$BINARY_PATH"
         shell: bash
 
+      # Upload artifacts for all builds (not just failures)
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/${{ matrix.goos }}-${{ matrix.goarch }}/syncopatedb-${{ matrix.goos }}-${{ matrix.goarch }}
+          if-no-files-found: error
+
+      # Keep the failure artifact upload separately
       - name: Upload build artifacts (on failure)
         if: failure()
         uses: actions/upload-artifact@v4
@@ -120,8 +155,8 @@ jobs:
   # New job to build and publish Docker image
   docker:
     needs: build
-    # Only run this job if all builds succeed and we're on a tag
-    if: success() && startsWith(github.ref, 'refs/tags/v')
+    # Run if all builds succeed and either we're on a tag or workflow_dispatch with publish_docker=true
+    if: success() && (startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.event.inputs.publish_docker == 'true'))
     runs-on: ubuntu-24.04
 
     steps:
@@ -131,29 +166,39 @@ jobs:
       - name: Install QEMU User-Mode Emulation
         run: sudo apt-get update && sudo apt-get install -y qemu-user
 
-      - name: Extract version from tag
+      - name: Extract version information
         id: get_version
-        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "VERSION=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+            echo "Using manually specified version: ${{ github.event.inputs.version }}"
+          else
+            echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+            echo "Using version from tag: ${GITHUB_REF#refs/tags/v}"
+          fi
+
+      # Create directories for the binaries
+      - name: Create directories for binaries
+        run: mkdir -p docker/bin/amd64 docker/bin/arm64
 
       # Download both amd64 and arm64 binaries
       - name: Download Linux AMD64 binary
         uses: actions/download-artifact@v4
         with:
           name: dist-linux-amd64
-          path: docker/linux-amd64/
+          path: docker/bin/amd64/
 
       - name: Download Linux ARM64 binary
         uses: actions/download-artifact@v4
         with:
           name: dist-linux-arm64
-          path: docker/linux-arm64/
+          path: docker/bin/arm64/
 
-      # Prepare binaries with correct names
+      # Rename binaries to the expected names
       - name: Prepare binaries for multi-arch build
         run: |
-          mkdir -p docker/bin/amd64 docker/bin/arm64
-          cp docker/linux-amd64/syncopatedb-linux-amd64 docker/bin/amd64/syncopatedb
-          cp docker/linux-arm64/syncopatedb-linux-arm64 docker/bin/arm64/syncopatedb
+          mv docker/bin/amd64/syncopatedb-linux-amd64 docker/bin/amd64/syncopatedb
+          mv docker/bin/arm64/syncopatedb-linux-arm64 docker/bin/arm64/syncopatedb
           chmod +x docker/bin/amd64/syncopatedb docker/bin/arm64/syncopatedb
 
       - name: Set up QEMU
@@ -214,8 +259,11 @@ jobs:
           docker manifest push phillarmonic/syncopatedb:$VERSION
           
           # Create and push the manifest for the latest tag
-          docker manifest create phillarmonic/syncopatedb:latest \
-            phillarmonic/syncopatedb:$VERSION-amd64 \
-            phillarmonic/syncopatedb:$VERSION-arm64
-          
-          docker manifest push phillarmonic/syncopatedb:latest
+          # Only update 'latest' for non-dev versions (from tags or explicitly specified)
+          if [[ "$VERSION" != *-dev* ]] && [[ "${{ github.event_name }}" != "workflow_dispatch" || "${{ github.event.inputs.publish_docker }}" == "true" ]]; then
+            docker manifest create phillarmonic/syncopatedb:latest \
+              phillarmonic/syncopatedb:$VERSION-amd64 \
+              phillarmonic/syncopatedb:$VERSION-arm64
+            
+            docker manifest push phillarmonic/syncopatedb:latest
+          fi
