@@ -1,7 +1,45 @@
-FROM alpine:latest
+# Build stage
+FROM golang:1.24-alpine AS builder
+ARG TARGETARCH
+ARG UPX_VERSION=5.0.0
 
-# Build arg to specify architecture
-ARG ARCH=amd64
+# Install build dependencies
+RUN apk add --no-cache git curl tar xz
+
+# Download and install UPX for the correct architecture
+RUN if [ "$TARGETARCH" = "amd64" ] || [ -z "$TARGETARCH" ]; then \
+      ARCH="amd64_linux"; \
+    elif [ "$TARGETARCH" = "arm64" ]; then \
+      ARCH="arm64_linux"; \
+    else \
+      echo "Unsupported architecture: $TARGETARCH" && exit 1; \
+    fi && \
+    curl -L https://github.com/upx/upx/releases/download/v${UPX_VERSION}/upx-${UPX_VERSION}-${ARCH}.tar.xz -o upx.tar.xz && \
+    tar -xf upx.tar.xz && \
+    mv upx-${UPX_VERSION}-${ARCH}/upx /usr/local/bin/ && \
+    rm -rf upx.tar.xz upx-${UPX_VERSION}-${ARCH} && \
+    upx --version
+
+# Set the working directory
+WORKDIR /app
+
+# Copy go.mod and go.sum first to leverage Docker cache
+COPY go.mod go.sum ./
+
+# Download dependencies
+RUN go mod download
+
+# Copy the entire source code
+COPY . .
+
+# Build the application
+RUN CGO_ENABLED=0 GOOS=linux go build -o syncopatedb ./cmd/main.go
+
+# Compress the binary with UPX
+RUN upx --best --lzma syncopatedb
+
+# Final stage
+FROM alpine:latest
 
 # Install runtime dependencies
 RUN apk add --no-cache tzdata ca-certificates && \
@@ -18,9 +56,8 @@ RUN mkdir -p /data && \
 # Set the working directory
 WORKDIR /app
 
-# Copy the binary for the specific architecture
-COPY --chown=syncopate:syncopate bin/${ARCH}/syncopatedb /app/syncopatedb
-RUN chmod +x /app/syncopatedb
+# Copy the binary from the builder stage
+COPY --from=builder /app/syncopatedb .
 
 # Use the non-root user
 USER syncopate
