@@ -265,7 +265,7 @@ func (s *Server) compressionInfoHandler(w http.ResponseWriter, r *http.Request) 
             "total": 3,
             "page": 1,
             "pageSize": 50,
-            "serverInfo": "SyncopateDB v0.1.2"
+            "serverInfo": "SyncopateDB"
         }
     }`)
 
