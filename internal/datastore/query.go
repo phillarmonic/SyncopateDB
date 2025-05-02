@@ -2,6 +2,7 @@ package datastore
 
 import (
 	"errors"
+	"fmt"
 	"reflect"
 	"sort"
 	"strings"
@@ -27,9 +28,12 @@ func (qs *QueryService) Query(options QueryOptions) ([]common.Entity, error) {
 	qs.engine.mu.RLock()
 	defer qs.engine.mu.RUnlock()
 
-	// Verify entity type
-	if _, exists := qs.engine.definitions[options.EntityType]; !exists {
-		return nil, errors.New("entity type not registered")
+	// Get the entity type name from the options
+	entityTypeName := options.EntityType
+
+	// Verify an entity type exists
+	if _, exists := qs.engine.definitions[entityTypeName]; !exists {
+		return nil, fmt.Errorf("entity type '%s' not registered", entityTypeName)
 	}
 
 	// Start with all entities of the specified type
@@ -621,25 +625,64 @@ func (qs *QueryService) ExecutePaginatedQuery(options QueryOptions) (*PaginatedR
 	// This gets us all matching results for accurate counting
 	queryOptionsForCount := options
 	queryOptionsForCount.Offset = 0
-	queryOptionsForCount.Limit = 0 // No limit to get all matches for counting
+	queryOptionsForCount.Limit = 0   // No limit to get all matches for counting
+	queryOptionsForCount.Joins = nil // Remove joins for the count query
 
 	allMatchingResults, err := qs.Query(queryOptionsForCount)
 	if err != nil {
 		return nil, err
 	}
 
+	// Apply offset and limit before joins for better performance
+	startIndex := options.Offset
+	if startIndex > len(allMatchingResults) {
+		startIndex = len(allMatchingResults)
+	}
+
+	endIndex := len(allMatchingResults)
+	if options.Limit > 0 && startIndex+options.Limit < endIndex {
+		endIndex = startIndex + options.Limit
+	}
+
+	results := allMatchingResults
+	if startIndex > 0 || endIndex < len(allMatchingResults) {
+		results = allMatchingResults[startIndex:endIndex]
+	}
+
+	// Make copies of the entities before processing joins
+	if len(options.Joins) > 0 {
+		resultCopies := make([]common.Entity, len(results))
+		for i, entity := range results {
+			// Create a deep copy
+			resultCopies[i] = common.Entity{
+				ID:     entity.ID,
+				Type:   entity.Type,
+				Fields: make(map[string]interface{}),
+			}
+
+			// Copy all fields
+			for k, v := range entity.Fields {
+				resultCopies[i].Fields[k] = v
+			}
+		}
+
+		// Process joins on the copies
+		for _, join := range options.Joins {
+			if err := qs.executeJoin(resultCopies, join); err != nil {
+				return nil, fmt.Errorf("join error: %w", err)
+			}
+		}
+
+		// Use the copies with joins applied
+		results = resultCopies
+	}
+
 	// Total filtered count is the number of matches after all filters are applied
 	totalFilteredCount := len(allMatchingResults)
 
-	// Now execute the actual query with pagination
-	results, err := qs.Query(options)
-	if err != nil {
-		return nil, err
-	}
-
 	return &PaginatedResponse{
 		Data:       results,
-		Total:      totalFilteredCount, // Use filtered count instead of total entity count
+		Total:      totalFilteredCount,
 		Count:      len(results),
 		Limit:      options.Limit,
 		Offset:     options.Offset,
@@ -680,4 +723,53 @@ func (qs *QueryService) filterInternalFields(entity common.Entity) common.Entity
 	}
 
 	return filteredEntity
+}
+
+func (qs *QueryService) ExecuteQueryWithJoins(options QueryOptions) (*PaginatedResponse, error) {
+	// Start with the base query execution
+	baseResponse, err := qs.ExecutePaginatedQuery(options)
+	if err != nil {
+		return nil, err
+	}
+
+	// If there are no joins, return the base response
+	if len(options.Joins) == 0 {
+		return baseResponse, nil
+	}
+
+	// Create a deep copy of the entities from the base response
+	copiedEntities := make([]common.Entity, len(baseResponse.Data))
+	for i, entity := range baseResponse.Data {
+		// Copy each entity
+		copiedEntities[i] = common.Entity{
+			ID:     entity.ID,
+			Type:   entity.Type,
+			Fields: make(map[string]interface{}),
+		}
+
+		// Copy all fields
+		for k, v := range entity.Fields {
+			copiedEntities[i].Fields[k] = v
+		}
+	}
+
+	// Process joins on the copied entities
+	for _, join := range options.Joins {
+		if err := qs.executeJoin(copiedEntities, join); err != nil {
+			return nil, fmt.Errorf("join error: %w", err)
+		}
+	}
+
+	// Create a new response with the copied and joined entities
+	joinedResponse := &PaginatedResponse{
+		Total:      baseResponse.Total,
+		Count:      len(copiedEntities),
+		Limit:      baseResponse.Limit,
+		Offset:     baseResponse.Offset,
+		HasMore:    baseResponse.HasMore,
+		EntityType: baseResponse.EntityType,
+		Data:       copiedEntities,
+	}
+
+	return joinedResponse, nil
 }

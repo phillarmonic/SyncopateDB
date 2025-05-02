@@ -116,6 +116,7 @@ func (s *Server) setupRoutes() {
 
 	// Query
 	api.HandleFunc("/query", s.handleQuery).Methods(http.MethodPost)
+	api.HandleFunc("/query/join", s.handleNestedQuery).Methods(http.MethodPost)
 
 	// Health check
 	s.router.HandleFunc("/health", s.handleHealthCheck).Methods(http.MethodGet)
@@ -323,4 +324,10 @@ func (rw *responseWriter) WriteHeader(code int) {
 // GetMemoryMonitor returns the server's memory monitor instance
 func (s *Server) GetMemoryMonitor() *monitoring.MemoryMonitor {
 	return s.memoryMonitor
+}
+
+func (s *Server) logJoinDebug(message string, fields ...interface{}) {
+	if settings.Config.Debug {
+		s.logger.WithField("component", "join_debug").Debugf(message, fields...)
+	}
 }

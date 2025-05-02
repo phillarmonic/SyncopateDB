@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/phillarmonic/syncopate-db/internal/about"
 	"github.com/phillarmonic/syncopate-db/internal/settings"
 	"github.com/sirupsen/logrus"
 	"net/http"
@@ -37,7 +38,7 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		"enableZSTD":    settings.Config.EnableZSTD,
 		"colorizedLogs": settings.Config.ColorizedLogs,
 		"serverTime":    time.Now().Format(time.RFC3339),
-		"version":       "0.0.1", // This should be sourced from the about package
+		"version":       about.About().Version,
 		"environment":   determineEnvironment(),
 	}
 
@@ -47,9 +48,9 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 // handleWelcome provides a welcome message for the root path
 func (s *Server) handleWelcome(w http.ResponseWriter, r *http.Request) {
 	welcomeMessage := WelcomeResponse{
-		Name:          "SyncopateDB",
-		Version:       "0.0.1",
-		Description:   "A flexible, lightweight data store with advanced query capabilities",
+		Name:          about.About().Name,
+		Version:       about.About().Version,
+		Description:   about.About().Description,
 		Documentation: "/api/v1",
 		HealthCheck:   "/health",
 		Status:        "running",
@@ -479,8 +480,20 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 	// Filter internal fields from response data and convert IDs
 	filteredData := make([]interface{}, len(response.Data))
 	for i, entity := range response.Data {
-		// Filter internal fields first
-		filteredEntity := s.filterInternalFields(entity)
+		// Create a filtered copy of the entity
+		filteredEntity := common.Entity{
+			ID:     entity.ID,
+			Type:   entity.Type,
+			Fields: make(map[string]interface{}),
+		}
+
+		// Copy non-internal fields (those not starting with underscore)
+		for name, value := range entity.Fields {
+			if !strings.HasPrefix(name, "_") {
+				filteredEntity.Fields[name] = value
+			}
+		}
+
 		// Then convert to representation with proper ID type
 		filteredData[i] = common.ConvertToRepresentation(filteredEntity, def.IDGenerator)
 	}

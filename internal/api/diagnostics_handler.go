@@ -2,6 +2,7 @@ package api
 
 import (
 	"fmt"
+	"github.com/phillarmonic/syncopate-db/internal/about"
 	"github.com/phillarmonic/syncopate-db/internal/monitoring"
 	"github.com/phillarmonic/syncopate-db/internal/settings"
 	"net/http"
@@ -52,7 +53,7 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 	diagnostic := map[string]interface{}{
 		"timestamp":   time.Now().Format(time.RFC3339),
 		"uptime":      time.Since(startedAt).String(),
-		"version":     "0.0.1", // Should be from the about package
+		"version":     about.About().Version,
 		"environment": determineEnvironment(),
 		"go_version":  runtime.Version(),
 		"goroutines":  runtime.NumGoroutine(),
