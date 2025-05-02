@@ -1,26 +1,7 @@
-# Build stage
-FROM golang:1.24-alpine AS builder
-
-# Install build dependencies
-RUN apk add --no-cache git
-
-# Set the working directory
-WORKDIR /app
-
-# Copy go.mod and go.sum first to leverage Docker cache
-COPY go.mod go.sum ./
-
-# Download dependencies
-RUN go mod download
-
-# Copy the entire source code
-COPY . .
-
-# Build the application
-RUN CGO_ENABLED=0 GOOS=linux go build -o syncopatedb ./cmd/main.go
-
-# Final stage
 FROM alpine:latest
+
+# Build arg to specify architecture
+ARG ARCH=amd64
 
 # Install runtime dependencies
 RUN apk add --no-cache tzdata ca-certificates && \
@@ -37,8 +18,9 @@ RUN mkdir -p /data && \
 # Set the working directory
 WORKDIR /app
 
-# Copy the binary from the builder stage
-COPY --from=builder /app/syncopatedb .
+# Copy the binary for the specific architecture
+COPY --chown=syncopate:syncopate bin/${ARCH}/syncopatedb /app/syncopatedb
+RUN chmod +x /app/syncopatedb
 
 # Use the non-root user
 USER syncopate
