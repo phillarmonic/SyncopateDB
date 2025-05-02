@@ -7,6 +7,7 @@ import (
 	"github.com/phillarmonic/syncopate-db/internal/settings"
 	"net/http"
 	"runtime"
+	"strings"
 	"time"
 )
 
@@ -49,7 +50,10 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 		peakBytes = safeUint64(peak)
 	}
 
-	// Create diagnostic response with safe conversions
+	// Determine if compression is available - remove the unused variable
+	compressionAvailable := s.compressor != nil
+
+	// Create a diagnostic response with safe conversions
 	diagnostic := map[string]interface{}{
 		"timestamp":   time.Now().Format(time.RFC3339),
 		"uptime":      time.Since(startedAt).String(),
@@ -59,13 +63,24 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 		"goroutines":  runtime.NumGoroutine(),
 		"cpu_cores":   runtime.NumCPU(),
 		"settings": map[string]interface{}{
-			"debug":          settings.Config.Debug,
-			"log_level":      settings.Config.LogLevel,
-			"port":           settings.Config.Port,
-			"enable_wal":     settings.Config.EnableWAL,
-			"enable_zstd":    settings.Config.EnableZSTD,
-			"colorized_logs": settings.Config.ColorizedLogs,
-			"server_started": settings.Config.ServerStarted,
+			"debug":            settings.Config.Debug,
+			"log_level":        settings.Config.LogLevel,
+			"port":             settings.Config.Port,
+			"enable_wal":       settings.Config.EnableWAL,
+			"enable_zstd":      settings.Config.EnableZSTD,     // Database compression
+			"enable_http_zstd": settings.Config.EnableHTTPZSTD, // HTTP compression
+			"colorized_logs":   settings.Config.ColorizedLogs,
+			"server_started":   settings.Config.ServerStarted,
+		},
+		// Update the compression section:
+		"compression": map[string]interface{}{
+			"enabled":          settings.Config.EnableHTTPZSTD, // Use HTTP-specific setting
+			"available":        compressionAvailable,
+			"type":             "zstd",
+			"status":           compressionAvailable && settings.Config.EnableHTTPZSTD,
+			"client_supported": strings.Contains(r.Header.Get("Accept-Encoding"), "zstd"),
+			"response_compressed": strings.Contains(r.Header.Get("Accept-Encoding"), "zstd") &&
+				compressionAvailable && settings.Config.EnableHTTPZSTD,
 		},
 		"memory": map[string]interface{}{
 			"current":          monitoring.FormatBytes(rtStats.HeapAlloc),
@@ -147,6 +162,7 @@ func (s *Server) writeDiagnosticsText(w http.ResponseWriter, diag map[string]int
 	memory := diag["memory"].(map[string]interface{})
 	entities := diag["entities"].(map[string]interface{})
 	settings := diag["settings"].(map[string]interface{})
+	compression := diag["compression"].(map[string]interface{})
 
 	// Write header
 	w.Write([]byte("SYNCOPATEDB DIAGNOSTIC INFORMATION\n"))
@@ -162,6 +178,16 @@ func (s *Server) writeDiagnosticsText(w http.ResponseWriter, diag map[string]int
 	w.Write([]byte("Go Version:   " + diag["go_version"].(string) + "\n"))
 	w.Write([]byte("CPU Cores:    " + intToString(diag["cpu_cores"].(int)) + "\n"))
 	w.Write([]byte("Goroutines:   " + intToString(diag["goroutines"].(int)) + "\n\n"))
+
+	// Compression info
+	w.Write([]byte("Compression Information:\n"))
+	w.Write([]byte("-----------------------\n"))
+	w.Write([]byte("Enabled:           " + boolToString(compression["enabled"].(bool)) + "\n"))
+	w.Write([]byte("Available:         " + boolToString(compression["available"].(bool)) + "\n"))
+	w.Write([]byte("Type:              " + compression["type"].(string) + "\n"))
+	w.Write([]byte("Status:            " + boolToString(compression["status"].(bool)) + "\n"))
+	w.Write([]byte("Client Supported:  " + boolToString(compression["client_supported"].(bool)) + "\n"))
+	w.Write([]byte("Response Compressed: " + boolToString(compression["response_compressed"].(bool)) + "\n\n"))
 
 	// Memory info
 	w.Write([]byte("Memory Usage:\n"))
@@ -198,7 +224,8 @@ func (s *Server) writeDiagnosticsText(w http.ResponseWriter, diag map[string]int
 	w.Write([]byte("Log Level:        " + settings["log_level"].(string) + "\n"))
 	w.Write([]byte("Port:             " + intToString(settings["port"].(int)) + "\n"))
 	w.Write([]byte("WAL Enabled:      " + boolToString(settings["enable_wal"].(bool)) + "\n"))
-	w.Write([]byte("ZSTD Enabled:     " + boolToString(settings["enable_zstd"].(bool)) + "\n"))
+	w.Write([]byte("ZSTD DB Enabled:    " + boolToString(settings["enable_zstd"].(bool)) + "\n"))
+	w.Write([]byte("ZSTD HTTP Enabled:  " + boolToString(settings["enable_http_zstd"].(bool)) + "\n"))
 	w.Write([]byte("Colorized Logs:   " + boolToString(settings["colorized_logs"].(bool)) + "\n"))
 	w.Write([]byte("Server Started:   " + boolToString(settings["server_started"].(bool)) + "\n"))
 }
@@ -221,4 +248,82 @@ func boolToString(b bool) string {
 		return "Yes"
 	}
 	return "No"
+}
+
+func (s *Server) compressionInfoHandler(w http.ResponseWriter, r *http.Request) {
+	// Check if client supports compression
+	clientSupportsZstd := strings.Contains(r.Header.Get("Accept-Encoding"), "zstd")
+
+	// Create test payloads of different types to demonstrate compression
+	jsonSample := []byte(`{
+        "entities": [
+            {"id": 1, "name": "Example Entity 1", "description": "This is an example entity with some data"},
+            {"id": 2, "name": "Example Entity 2", "description": "This is another example entity with some data"},
+            {"id": 3, "name": "Example Entity 3", "description": "This is yet another example entity with different data"}
+        ],
+        "metadata": {
+            "total": 3,
+            "page": 1,
+            "pageSize": 50,
+            "serverInfo": "SyncopateDB v0.1.2"
+        }
+    }`)
+
+	textSample := []byte(`
+        SyncopateDB - A flexible, lightweight data store with advanced query capabilities
+        
+        SyncopateDB provides a simple yet powerful way to store and query data.
+        It supports various entity types, each with its own fields and relationships.
+        Data can be queried with a flexible query language, supporting filters, sorting, and pagination.
+        SyncopateDB also supports transactions, ACID compliance, and more.
+    `)
+
+	repeatingSample := []byte(strings.Repeat("SyncopateDB is awesome! ", 100))
+
+	// Calculate compression ratios
+	jsonRatio := 1.0
+	textRatio := 1.0
+	repeatingRatio := 1.0
+
+	if s.compressor != nil {
+		jsonRatio = s.estimateCompressionRatio(jsonSample)
+		textRatio = s.estimateCompressionRatio(textSample)
+		repeatingRatio = s.estimateCompressionRatio(repeatingSample)
+	}
+
+	// Create response
+	response := map[string]interface{}{
+		"compression_status": map[string]interface{}{
+			"db_compression_enabled":   settings.Config.EnableZSTD,
+			"http_compression_enabled": settings.Config.EnableHTTPZSTD,
+			"compressor_available":     s.compressor != nil,
+			"client_supported":         clientSupportsZstd,
+			"active_for_response":      clientSupportsZstd && s.compressor != nil && settings.Config.EnableHTTPZSTD,
+		},
+		"compression_efficiency": map[string]interface{}{
+			"json_sample": map[string]interface{}{
+				"original_size": len(jsonSample),
+				"ratio":         jsonRatio,
+				"formatted":     formatCompressionRatio(jsonRatio),
+			},
+			"text_sample": map[string]interface{}{
+				"original_size": len(textSample),
+				"ratio":         textRatio,
+				"formatted":     formatCompressionRatio(textRatio),
+			},
+			"repeating_sample": map[string]interface{}{
+				"original_size": len(repeatingSample),
+				"ratio":         repeatingRatio,
+				"formatted":     formatCompressionRatio(repeatingRatio),
+			},
+		},
+		"server_info": map[string]interface{}{
+			"timestamp":   time.Now().Format(time.RFC3339),
+			"version":     about.About().Version,
+			"go_version":  runtime.Version(),
+			"environment": determineEnvironment(),
+		},
+	}
+
+	s.respondWithJSON(w, http.StatusOK, response, true)
 }

@@ -1,7 +1,12 @@
 package api
 
 import (
+	"bytes"
+	"github.com/klauspost/compress/zstd"
+	"github.com/phillarmonic/syncopate-db/internal/settings"
+	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -135,4 +140,88 @@ func (s *Server) rateLimitMiddleware(next http.Handler) http.Handler {
 
 		next.ServeHTTP(w, r)
 	})
+}
+
+// compressionMiddleware compresses HTTP responses using zstd when appropriate
+func (s *Server) compressionMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Check if client accepts compression
+		acceptEncoding := r.Header.Get("Accept-Encoding")
+		supportsCompression := strings.Contains(acceptEncoding, "zstd")
+
+		// Only use compression if:
+		// 1. Client supports it
+		// 2. HTTP compression is enabled in settings (using the new setting)
+		// 3. We have a compressor initialized
+		if supportsCompression && settings.Config.EnableHTTPZSTD && s.compressor != nil {
+			// Create a response wrapper that compresses the output
+			cw := &compressWriter{
+				ResponseWriter: w,
+				compressor:     s.compressor,
+				statusCode:     http.StatusOK,
+			}
+			// Use the compressed writer instead
+			w = cw
+			w.Header().Set("Content-Encoding", "zstd")
+		}
+
+		// Call the next handler with potentially wrapped response writer
+		next.ServeHTTP(w, r)
+	})
+}
+
+// compressWriter is a ResponseWriter wrapper that compresses the response with zstd
+type compressWriter struct {
+	http.ResponseWriter
+	compressor    *zstd.Encoder
+	writer        io.Writer
+	statusCode    int
+	headerWritten bool
+	buf           bytes.Buffer
+}
+
+// WriteHeader captures the status code and writes headers
+func (cw *compressWriter) WriteHeader(code int) {
+	if cw.headerWritten {
+		return
+	}
+	cw.statusCode = code
+
+	// Skip compression for certain status codes
+	if code < 200 || code == 204 || code == 304 {
+		cw.ResponseWriter.Header().Del("Content-Encoding")
+		cw.ResponseWriter.WriteHeader(code)
+		cw.headerWritten = true
+		return
+	}
+
+	// Finalize headers and write them
+	cw.ResponseWriter.Header().Add("Vary", "Accept-Encoding")
+	cw.ResponseWriter.WriteHeader(code)
+	cw.headerWritten = true
+}
+
+// Write compresses the data and writes it to the underlying ResponseWriter
+func (cw *compressWriter) Write(p []byte) (int, error) {
+	if !cw.headerWritten {
+		cw.WriteHeader(http.StatusOK)
+	}
+
+	// For error responses, don't compress
+	if cw.statusCode >= 400 {
+		return cw.ResponseWriter.Write(p)
+	}
+
+	// Write to buffer first
+	n, err := cw.buf.Write(p)
+	if err != nil {
+		return n, err
+	}
+
+	// Compress and write the buffer
+	compressed := cw.compressor.EncodeAll(cw.buf.Bytes(), nil)
+	cw.buf.Reset()
+
+	_, err = cw.ResponseWriter.Write(compressed)
+	return n, err
 }

@@ -47,3 +47,31 @@ func (s *Server) normalizeEntityID(entityType string, rawID string) (string, err
 		return rawID, nil
 	}
 }
+
+// estimateCompressionRatio estimates the compression ratio for a sample payload
+func (s *Server) estimateCompressionRatio(data []byte) float64 {
+	if s.compressor == nil {
+		return 1.0 // No compression
+	}
+
+	// Compress the data
+	compressed := s.compressor.EncodeAll(data, nil)
+
+	// Calculate ratio (original size / compressed size)
+	if len(compressed) == 0 {
+		return 1.0
+	}
+
+	return float64(len(data)) / float64(len(compressed))
+}
+
+// formatCompressionRatio formats a compression ratio as a percentage string
+func formatCompressionRatio(ratio float64) string {
+	// Subtract 1 and convert to percentage (e.g., 2.5x becomes "60% smaller")
+	if ratio <= 1.0 {
+		return "0% (no compression)"
+	}
+
+	reductionPercent := (1.0 - (1.0 / ratio)) * 100
+	return fmt.Sprintf("%.1f%% smaller (%.1fx)", reductionPercent, ratio)
+}
