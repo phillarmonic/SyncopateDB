@@ -4,7 +4,7 @@
   <img src="https://github.com/user-attachments/assets/11dd16bf-f625-44cf-aa17-06d027544ce5" alt="syncopate" width="300">
 </p>
 
-SyncopateDB is a flexible, lightweight, optimized for SSD data store with advanced query capabilities. It provides a REST API for data storage and retrieval with robust features including indexing, complex queries, and persistence.
+SyncopateDB is a flexible, lightweight, optimized for SSD data store with advanced query capabilities and low latency. It provides a REST API for data storage and retrieval with robust features including indexing, complex queries, and persistence.
 
 ## Table of Contents
 
@@ -37,7 +37,7 @@ SyncopateDB is a flexible, lightweight, optimized for SSD data store with advanc
 - **Indexing**: Create indexes for fast data retrieval
 - **Multiple ID Strategies**: Support for auto-increment, UUID, CUID generation
 - **Advanced Querying**: Filter, sort, and paginate data with a flexible query API
-- **Joins and Relations**: Link related data between entity types
+- **Joins and Relations**: Link related data between entity types (with soft relationships)
 - **Fuzzy Search**: Find data using fuzzy matching algorithms
 - **Array Operations**: Query for values within arrays
 - **Transaction Support**: Group operations for atomic changes
@@ -117,6 +117,7 @@ SyncopateDB supports advanced querying with filtering, sorting, and pagination.
 ### Joins
 
 SyncopateDB supports joining related data between entity types. In SyncopateDB, joins are non-destructive views made in memory to represent data. This means the source entities are never modified by the join operation.
+Also, consider relationships are soft defined. Thus, there are no entity relationships defined in the database and there are no features such as cascade deleting.
 
 | Method | Endpoint           | Description                |
 | ------ | ------------------ | -------------------------- |
