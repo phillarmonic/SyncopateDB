@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"github.com/klauspost/compress/zstd"
 	"github.com/phillarmonic/syncopate-db/internal/monitoring"
 	"github.com/phillarmonic/syncopate-db/internal/settings"
 	"net/http"
@@ -63,7 +64,8 @@ type Server struct {
 	logger        *logrus.Logger
 	rateLimiter   *RateLimiter
 	memoryMonitor *monitoring.MemoryMonitor
-	mu            sync.RWMutex // Protect response writers in concurrent handlers
+	compressor    *zstd.Encoder // Add this field for response compression
+	mu            sync.RWMutex  // Protect response writers in concurrent handlers
 }
 
 // NewServer creates a new REST API server
@@ -78,6 +80,19 @@ func NewServer(engine common.DatastoreEngine, queryService *datastore.QueryServi
 	// Start the memory monitor immediately
 	memoryMonitor.Start()
 
+	// Initialize ZSTD compressor if HTTP compression is enabled in settings
+	var compressor *zstd.Encoder
+	var err error
+	if settings.Config.EnableHTTPZSTD { // Use the new setting
+		// Create a new encoder with default compression level
+		compressor, err = zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedDefault))
+		if err != nil {
+			logger.Warnf("Failed to initialize ZSTD compressor for HTTP: %v, compression disabled", err)
+		} else {
+			logger.Info("ZSTD HTTP response compression enabled")
+		}
+	}
+
 	server := &Server{
 		router:        mux.NewRouter(),
 		config:        config,
@@ -85,7 +100,8 @@ func NewServer(engine common.DatastoreEngine, queryService *datastore.QueryServi
 		queryService:  queryService,
 		logger:        logger,
 		rateLimiter:   NewRateLimiter(config.RateLimit, config.RateWindow),
-		memoryMonitor: memoryMonitor, // Initialize the memory monitor
+		memoryMonitor: memoryMonitor,
+		compressor:    compressor, // Set the compressor
 	}
 
 	server.setupRoutes()
@@ -136,6 +152,7 @@ func (s *Server) setupRoutes() {
 
 	// Diagnostics route
 	api.HandleFunc("/diagnostics", s.handleDiagnostics).Methods(http.MethodGet)
+	api.HandleFunc("/compression", s.compressionInfoHandler).Methods(http.MethodGet)
 }
 
 // handleDebug provides a debug endpoint for testing when in debug mode
@@ -178,6 +195,7 @@ func (s *Server) Start() error {
 	handler = s.logMiddleware(handler)
 	handler = s.rateLimitMiddleware(handler)
 	handler = s.securityHeadersMiddleware(handler)
+	handler = s.compressionMiddleware(handler) // Add compression middleware
 	handler = s.requestIDMiddleware(handler)
 	handler = s.recoveryMiddleware(handler)
 
@@ -210,6 +228,11 @@ func (s *Server) Start() error {
 	s.logger.Info("SyncopateDB Server is shutting down...")
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+
+	// Close the compressor if it was initialized
+	if s.compressor != nil {
+		s.compressor.Close()
+	}
 
 	if err := s.server.Shutdown(ctx); err != nil {
 		s.logger.Fatalf("Server shutdown error: %v", err)

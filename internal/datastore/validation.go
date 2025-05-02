@@ -39,20 +39,20 @@ func (dse *Engine) validateEntityData(entityType string, data map[string]interfa
 		value, exists := data[fieldDef.Name]
 
 		if fieldDef.Required && !exists {
-			return fmt.Errorf("required field %s is missing", fieldDef.Name)
+			return fmt.Errorf("required field '%s' is missing", fieldDef.Name)
 		}
 
 		if exists {
 			// Check for null value
 			if value == nil {
 				if !fieldDef.Nullable {
-					return fmt.Errorf("field %s cannot be null", fieldDef.Name)
+					return fmt.Errorf("field '%s' cannot be null", fieldDef.Name)
 				}
 				continue // Skip type validation for null values
 			}
 
 			if err := validateFieldType(fieldDef.Type, value); err != nil {
-				return fmt.Errorf("field %s: %w", fieldDef.Name, err)
+				return fmt.Errorf("field '%s': %w", fieldDef.Name, err)
 			}
 		}
 	}
@@ -138,7 +138,7 @@ func validateFieldType(fieldType string, value interface{}) error {
 func (dse *Engine) validateUpdateData(entityType string, data map[string]interface{}) error {
 	def, exists := dse.definitions[entityType]
 	if !exists {
-		return fmt.Errorf("entity type %s not registered", entityType)
+		return fmt.Errorf("entity type '%s' not registered", entityType)
 	}
 
 	// Check for fields that start with underscore (reserved for internal use)
@@ -170,20 +170,20 @@ func (dse *Engine) validateUpdateData(entityType string, data map[string]interfa
 		}
 
 		if fieldDef == nil {
-			return fmt.Errorf("field %s does not exist in entity type %s", fieldName, entityType)
+			return fmt.Errorf("field '%s' does not exist in entity type %s", fieldName, entityType)
 		}
 
 		// Check for null value
 		if value == nil {
 			if !fieldDef.Nullable {
-				return fmt.Errorf("field %s cannot be null", fieldName)
+				return fmt.Errorf("field '%s' cannot be null", fieldName)
 			}
 			continue // Skip type validation for null values
 		}
 
 		// Validate field type
 		if err := validateFieldType(fieldDef.Type, value); err != nil {
-			return fmt.Errorf("field %s: %w", fieldName, err)
+			return fmt.Errorf("field '%s': %w", fieldName, err)
 		}
 	}
 

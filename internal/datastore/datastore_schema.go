@@ -143,7 +143,7 @@ func (dse *Engine) createMigrationPlan(originalDef, updatedDef common.EntityDefi
 			if originalField.Type != updatedField.Type {
 				// Check if the type change is compatible
 				if !isCompatibleTypeChange(originalField.Type, updatedField.Type) {
-					return nil, fmt.Errorf("incompatible type change for field %s: %s to %s",
+					return nil, fmt.Errorf("incompatible type change for field %s: '%s' to '%s'",
 						name, originalField.Type, updatedField.Type)
 				}
 
@@ -162,7 +162,7 @@ func (dse *Engine) createMigrationPlan(originalDef, updatedDef common.EntityDefi
 				// Special case: can't make a field required if it wasn't before
 				// (existing entities might not have this field)
 				if !originalField.Required && updatedField.Required {
-					return nil, fmt.Errorf("cannot make field %s required as it may not exist in all entities", name)
+					return nil, fmt.Errorf("cannot make field '%s' required as it may not exist in all entities", name)
 				}
 
 				plan.PropertyChanges = append(plan.PropertyChanges, PropertyChange{
@@ -214,7 +214,7 @@ func (dse *Engine) executeMigrationPlan(plan *MigrationPlan, originalDef, update
 				// Convert value to the new type if needed
 				convertedValue, err := convertFieldValue(value, change.OriginalType, change.NewType)
 				if err != nil {
-					return fmt.Errorf("failed to convert field %s for entity %s: %w",
+					return fmt.Errorf("failed to convert field '%s' for entity %s: %w",
 						change.FieldName, entity.ID, err)
 				}
 				entity.Fields[change.FieldName] = convertedValue

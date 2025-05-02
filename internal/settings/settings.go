@@ -1,3 +1,5 @@
+// Add this to internal/settings/settings.go
+
 package settings
 
 import (
@@ -26,13 +28,14 @@ func (l LogLevel) IsValid() bool {
 }
 
 type Configuration struct {
-	Port          int      `json:"port"`
-	Debug         bool     `json:"debug"`
-	LogLevel      LogLevel `json:"log_level"`
-	EnableWAL     bool     `json:"enable_wal"`
-	EnableZSTD    bool     `json:"enable_zstd"`
-	ColorizedLogs bool     `json:"colorized_logs"` // New setting for colored logs
-	ServerStarted bool     `json:"server_started"` // New setting for server-started status
+	Port           int      `json:"port"`
+	Debug          bool     `json:"debug"`
+	LogLevel       LogLevel `json:"log_level"`
+	EnableWAL      bool     `json:"enable_wal"`
+	EnableZSTD     bool     `json:"enable_zstd"`      // For database compression
+	EnableHTTPZSTD bool     `json:"enable_http_zstd"` // New setting for HTTP compression
+	ColorizedLogs  bool     `json:"colorized_logs"`   // Setting for colored logs
+	ServerStarted  bool     `json:"server_started"`   // Setting for server-started status
 }
 
 var Config Configuration
@@ -77,13 +80,14 @@ func init() {
 	logLevel := LogLevel(loadEnvString("LOG_LEVEL", string(LogLevelInfo)))
 
 	Config = Configuration{
-		Port:          loadEnvInt("PORT", 8080),
-		Debug:         loadEnvBool("DEBUG", false),
-		LogLevel:      logLevel,
-		EnableWAL:     loadEnvBool("ENABLE_WAL", true),
-		EnableZSTD:    loadEnvBool("ENABLE_ZSTD", false),
-		ColorizedLogs: loadEnvBool("COLORIZED_LOGS", true),
-		ServerStarted: false,
+		Port:           loadEnvInt("PORT", 8080),
+		Debug:          loadEnvBool("DEBUG", false),
+		LogLevel:       logLevel,
+		EnableWAL:      loadEnvBool("ENABLE_WAL", true),
+		EnableZSTD:     loadEnvBool("ENABLE_ZSTD", false),
+		EnableHTTPZSTD: loadEnvBool("ENABLE_HTTP_ZSTD", false),
+		ColorizedLogs:  loadEnvBool("COLORIZED_LOGS", true),
+		ServerStarted:  false,
 	}
 
 	if err := Config.Validate(); err != nil {

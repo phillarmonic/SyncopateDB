@@ -10,7 +10,7 @@ type PersistenceProvider interface {
 	// Core persistence operations
 	RegisterEntityType(store DatastoreEngine, def EntityDefinition) error
 	Insert(store DatastoreEngine, entityType, entityID string, data map[string]interface{}) error
-	Update(store DatastoreEngine, entityID string, data map[string]interface{}) error
+	Update(store DatastoreEngine, entityType string, entityID string, data map[string]interface{}) error
 	Delete(store DatastoreEngine, entityID string, entityType string) error
 
 	// Add the UpdateEntityType method
@@ -43,20 +43,15 @@ type DatastoreEngine interface {
 	GetEntityDefinition(entityType string) (EntityDefinition, error)
 	ListEntityTypes() []string
 	Insert(entityType, id string, data map[string]interface{}) error
-	Update(id string, data map[string]interface{}) error
+	Update(entityType string, id string, data map[string]interface{}) error // Updated signature
 	Delete(id string) error
 	Get(id string) (Entity, error)
 	GetEntityCount(entityType string) (int, error)
 	GetAllEntitiesOfType(entityType string) ([]Entity, error)
 
-	// Add the UpdateEntityType method to the interface
 	UpdateEntityType(updatedDef EntityDefinition) error
-
-	// Methods for ID generation
 	SetAutoIncrementCounter(entityType string, counter uint64) error
 	GetAutoIncrementCounter(entityType string) (uint64, error)
-
-	// Methods for deleted IDs management
 	MarkIDAsDeleted(entityType string, id string) error
 	GetDeletedIDs(entityType string) (map[string]bool, error)
 	LoadDeletedIDs(entityType string, deletedIDs map[string]bool) error

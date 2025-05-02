@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 )
 
@@ -26,7 +27,6 @@ func (s *Server) respondWithError(w http.ResponseWriter, code int, message strin
 func (s *Server) respondWithJSON(w http.ResponseWriter, code int, data interface{}, prettyPrint ...bool) {
 	// Set headers
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(code)
 
 	// Marshal data to JSON, with optional pretty printing
 	if data != nil {
@@ -49,13 +49,24 @@ func (s *Server) respondWithJSON(w http.ResponseWriter, code int, data interface
 
 		if err != nil {
 			s.logger.Errorf("Error marshaling JSON response: %v", err)
-			http.Error(w, `{"error":"Internal Server Error"}`, http.StatusInternalServerError)
+			// Set status code before writing error
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(`{"error":"Internal Server Error"}`))
 			return
 		}
+
+		// Set the content length header
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(response)))
+
+		// Set the status code
+		w.WriteHeader(code)
 
 		// Write response
 		if _, err := w.Write(response); err != nil {
 			s.logger.Errorf("Error writing JSON response: %v", err)
 		}
+	} else {
+		// No data, just set the status code
+		w.WriteHeader(code)
 	}
 }
