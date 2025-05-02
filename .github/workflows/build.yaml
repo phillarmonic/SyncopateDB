@@ -128,14 +128,6 @@ jobs:
           upx -t "$BINARY_PATH"
         shell: bash
 
-      # Upload artifacts for all builds (not just failures)
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: dist-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: dist/${{ matrix.goos }}-${{ matrix.goarch }}/syncopatedb-${{ matrix.goos }}-${{ matrix.goarch }}
-          if-no-files-found: error
-
       # Keep the failure artifact upload separately
       - name: Upload build artifacts (on failure)
         if: failure()
@@ -177,30 +169,6 @@ jobs:
             echo "Using version from tag: ${GITHUB_REF#refs/tags/v}"
           fi
 
-      # Create directories for the binaries
-      - name: Create directories for binaries
-        run: mkdir -p docker/bin/amd64 docker/bin/arm64
-
-      # Download both amd64 and arm64 binaries
-      - name: Download Linux AMD64 binary
-        uses: actions/download-artifact@v4
-        with:
-          name: dist-linux-amd64
-          path: docker/bin/amd64/
-
-      - name: Download Linux ARM64 binary
-        uses: actions/download-artifact@v4
-        with:
-          name: dist-linux-arm64
-          path: docker/bin/arm64/
-
-      # Rename binaries to the expected names
-      - name: Prepare binaries for multi-arch build
-        run: |
-          mv docker/bin/amd64/syncopatedb-linux-amd64 docker/bin/amd64/syncopatedb
-          mv docker/bin/arm64/syncopatedb-linux-arm64 docker/bin/arm64/syncopatedb
-          chmod +x docker/bin/amd64/syncopatedb docker/bin/arm64/syncopatedb
-
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
         with:
@@ -215,55 +183,15 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PAT }}
 
-      # Create and push the AMD64 image
-      - name: Build and Push AMD64 Docker Image
+      - name: Build and Push Multiarch Docker Image
         uses: docker/build-push-action@v5
         with:
-          context: ./docker
+          context: .
           file: ./docker/Dockerfile
-          platforms: linux/amd64
+          platforms: linux/amd64,linux/arm64
           push: true
-          build-args: |
-            ARCH=amd64
           tags: |
-            phillarmonic/syncopatedb:${{ steps.get_version.outputs.VERSION }}-amd64
-          cache-from: type=registry,ref=phillarmonic/syncopatedb:buildcache-amd64
-          cache-to: type=registry,ref=phillarmonic/syncopatedb:buildcache-amd64,mode=max
-
-      # Create and push the ARM64 image
-      - name: Build and Push ARM64 Docker Image
-        uses: docker/build-push-action@v5
-        with:
-          context: ./docker
-          file: ./docker/Dockerfile
-          platforms: linux/arm64
-          push: true
-          build-args: |
-            ARCH=arm64
-          tags: |
-            phillarmonic/syncopatedb:${{ steps.get_version.outputs.VERSION }}-arm64
-          cache-from: type=registry,ref=phillarmonic/syncopatedb:buildcache-arm64
-          cache-to: type=registry,ref=phillarmonic/syncopatedb:buildcache-arm64,mode=max
-
-      # Create and push the multi-arch manifest
-      - name: Create and Push Multi-arch Manifest
-        run: |
-          VERSION=${{ steps.get_version.outputs.VERSION }}
-          DOCKER_USER=${{ secrets.DOCKER_USERNAME }}
-          
-          # Create and push the manifest for the versioned tag
-          docker manifest create phillarmonic/syncopatedb:$VERSION \
-            phillarmonic/syncopatedb:$VERSION-amd64 \
-            phillarmonic/syncopatedb:$VERSION-arm64
-          
-          docker manifest push phillarmonic/syncopatedb:$VERSION
-          
-          # Create and push the manifest for the latest tag
-          # Only update 'latest' for non-dev versions (from tags or explicitly specified)
-          if [[ "$VERSION" != *-dev* ]] && [[ "${{ github.event_name }}" != "workflow_dispatch" || "${{ github.event.inputs.publish_docker }}" == "true" ]]; then
-            docker manifest create phillarmonic/syncopatedb:latest \
-              phillarmonic/syncopatedb:$VERSION-amd64 \
-              phillarmonic/syncopatedb:$VERSION-arm64
-            
-            docker manifest push phillarmonic/syncopatedb:latest
-          fi
+            phillarmonic/syncopatedb:${{ steps.get_version.outputs.VERSION}}
+            phillarmonic/syncopatedb:latest
+          cache-from: type=registry,ref=phillarmonic/syncopatedb:buildcache
+          cache-to: type=registry,ref=phillarmonic/syncopatedb:buildcache,mode=max
