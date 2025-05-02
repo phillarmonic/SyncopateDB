@@ -571,7 +571,11 @@ func (dse *Engine) Get(id string) (common.Entity, error) {
 		return entity, nil
 	}
 
-	// If not found, search through all entities
+	// If not found, check for composite keys that match the ID
+	// We can recognize the key format we're looking for
+	// but we need to be more careful than before
+
+	// First, look for composite keys (type:id format)
 	for key, entity := range dse.entities {
 		_, entityID := parseEntityKey(key)
 		if entityID == id {
@@ -580,6 +584,26 @@ func (dse *Engine) Get(id string) (common.Entity, error) {
 	}
 
 	return common.Entity{}, fmt.Errorf("entity with ID %s not found", id)
+}
+
+func (dse *Engine) GetByType(id string, entityType string) (common.Entity, error) {
+	dse.mu.RLock()
+	defer dse.mu.RUnlock()
+
+	// Try the composite key first
+	entityKey := createEntityKey(entityType, id)
+	entity, exists := dse.entities[entityKey]
+	if exists {
+		return entity, nil
+	}
+
+	// For backward compatibility, try just the ID but then verify the type
+	entity, err := dse.Get(id)
+	if err == nil && entity.Type == entityType {
+		return entity, nil
+	}
+
+	return common.Entity{}, fmt.Errorf("entity with ID %s and type %s not found", id, entityType)
 }
 
 // ForceSnapshot immediately creates a snapshot of the current state

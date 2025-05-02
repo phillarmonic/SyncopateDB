@@ -285,10 +285,23 @@ func (s *Server) handleGetEntity(w http.ResponseWriter, r *http.Request) {
 		}).Debug("Getting entity")
 	}
 
-	// Use the normalized ID for the get operation
-	entity, err := s.engine.Get(normalizedID)
-	if err != nil {
-		s.respondWithError(w, http.StatusNotFound, err.Error())
+	// Use a type-specific get method if available
+	var entity common.Entity
+	var getErr error
+
+	if engine, ok := s.engine.(*datastore.Engine); ok {
+		entity, getErr = engine.GetByType(normalizedID, entityType)
+	} else {
+		// Fallback for other implementations
+		entity, getErr = s.engine.Get(normalizedID)
+		// Check the type matches what we're looking for
+		if getErr == nil && entity.Type != entityType {
+			getErr = fmt.Errorf("entity with ID %s and type %s not found", normalizedID, entityType)
+		}
+	}
+
+	if getErr != nil {
+		s.respondWithError(w, http.StatusNotFound, getErr.Error())
 		return
 	}
 
