@@ -18,7 +18,7 @@ import (
 )
 
 func main() {
-	fmt.Println("SyncopateDB - Off-beat by design. On point by performance.")
+	fmt.Println("SyncopateDB - Precise by design. On point by performance.")
 	fmt.Println("High performance, SSD-optimized DB")
 	fmt.Println(fmt.Sprintf("Version: %s", about.About().Version))
 	fmt.Println("")
