@@ -10,16 +10,10 @@ DOCKERFILE_PATH="./docker/Dockerfile"
 PLATFORMS="linux/amd64,linux/arm64"
 BUILDX_INSTANCE="multiarch"
 
-# Default to current date-based version if none provided
+# Default to the current date-based version if none provided
 VERSION=${1:-$(date +%Y%m%d%H%M)}
 
 echo "🚀 Publishing multiarch Docker image ${IMAGE_NAME}:${VERSION}"
-
-# Check for Docker login status
-if ! docker info 2>/dev/null | grep -q "Username"; then
-  echo "❌ Not logged in to Docker Hub. Please run 'docker login' first."
-  exit 1
-fi
 
 # Create or use dedicated builder instance
 if ! docker buildx inspect "${BUILDX_INSTANCE}" &>/dev/null; then
@@ -36,10 +30,8 @@ docker buildx build \
   --platform "${PLATFORMS}" \
   --file "${DOCKERFILE_PATH}" \
   --push \
-  --no-cache \
   --tag "${IMAGE_NAME}:${VERSION}" \
   --tag "${IMAGE_NAME}:latest" \
-  --progress=plain \
   .
 
 # Verify the pushed images
