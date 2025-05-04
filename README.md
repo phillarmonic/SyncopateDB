@@ -43,7 +43,7 @@ SyncopateDB is designed with the following in mind:
 
 ## Use Cases
 
-SyncopateDB  is the right choice for you if you require:
+SyncopateDB is the right choice for you if you require:
 
 - Applications needing structured data with a schema
 - Systems requiring flexible querying capabilities
