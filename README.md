@@ -33,7 +33,7 @@ The core components include:
 
 ## Performance Characteristics
 
-While specific benchmarks aren't provided in the documentation, SyncopateDB appears designed for performance with:
+SyncopateDB is designed with the following in mind:
 
 - Efficient indexing for fast queries
 - Memory-efficient operations
