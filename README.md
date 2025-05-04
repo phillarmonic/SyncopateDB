@@ -51,7 +51,7 @@ SyncopateDB  is the right choice for you if you require:
 - Applications where a REST API for data access is preferred
 - Scenarios where relational-like queries (via joins) are needed but without the overhead of a traditional RDBMS
 
-## ## Table of Contents
+## Table of Contents
 
 - [Key Features](#key-features)
 - [Architecture](#architecture)
