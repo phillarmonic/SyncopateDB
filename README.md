@@ -4,10 +4,59 @@
   <img src="https://github.com/user-attachments/assets/11dd16bf-f625-44cf-aa17-06d027544ce5" alt="syncopate" width="300">
 </p>
 
-SyncopateDB is a flexible, lightweight, optimized for SSD data store with advanced query capabilities and low latency. It provides a REST API for data storage and retrieval with robust features including indexing, complex queries, and persistence.
+SyncopateDB is a flexible, lightweight, optimized for SSD database with advanced query capabilities and low latency. It provides a REST API for data storage and retrieval with robust features including indexing, complex queries, and persistence.
 
-## Table of Contents
 
+
+## Key Features
+
+SyncopateDB offers:
+
+- Schema definition with strong typing and field validation
+- Multiple ID generation strategies (auto-increment, UUID, CUID)
+- Advanced querying with filtering, sorting, pagination, and fuzzy search
+- Support for joins to link related data between entity types
+- Data persistence with Write-Ahead Logging (WAL) and snapshots
+- Schema evolution with compatibility checks
+- Memory efficiency through strategic caching and optimizations
+
+## Architecture
+
+The system is built in Go (requires 1.23+) and uses [Badger](https://github.com/hypermodeinc/badger) as its storage backend (which is battle tested for hundreds of terabytes of data), and provides excellent performance on SSDs. The database exposes a RESTful API for all operations.
+
+The core components include:
+
+- A datastore engine that manages entity definitions and data
+- A query service that handles filtering, sorting, and joins
+- A persistence layer that ensures durability through WAL and snapshots
+- A memory monitoring system to track resource usage
+
+## Performance Characteristics
+
+While specific benchmarks aren't provided in the documentation, SyncopateDB appears designed for performance with:
+
+- Efficient indexing for fast queries
+- Memory-efficient operations
+- SSD optimization
+- Data compression support (optional)
+- Intelligent caching
+
+## Use Cases
+
+SyncopateDB  is the right choice for you if you require:
+
+- Applications needing structured data with a schema
+- Systems requiring flexible querying capabilities
+- Projects where a full-featured SQL database might be overkill (or too slow)
+- Applications where a REST API for data access is preferred
+- Scenarios where relational-like queries (via joins) are needed but without the overhead of a traditional RDBMS
+
+## ## Table of Contents
+
+- [Key Features](#key-features)
+- [Architecture](#architecture)
+- [Performance Characteristics](#performance-characteristics)
+- [Use Cases](#use-cases)
 - [Features](#features)
 - [Installation](#installation)
 - [Getting Started](#getting-started)
@@ -28,8 +77,19 @@ SyncopateDB is a flexible, lightweight, optimized for SSD data store with advanc
   - [Using Joins](#using-joins)
 - [ID Generation Strategies](#id-generation-strategies)
 - [Configuration](#configuration)
+- [The verbose debug mode](#the-verbose-debug-mode)
 - [Persistence](#persistence)
+- [Using SyncopateDB with Docker](#using-syncopatedb-with-docker)
+  - [Quick Start](#quick-start)
+  - [Configuration Options](#configuration-options)
+  - [Data Persistence](#data-persistence)
+  - [Docker Compose Example](#docker-compose-example)
+  - [Security Considerations](#security-considerations)
+  - [Accessing the API](#accessing-the-api)
+  - [Container Maintenance](#container-maintenance)
+- [Docker](#using-syncopatedb-with-docker)
 - [Building from Source](#building-from-source)
+- [License](#license)
 
 ## Features
 
@@ -667,6 +727,223 @@ Key persistence features:
 - Automatic garbage collection
 - Compression support (optional)
 - Automated backup capabilities
+
+
+
+# Using SyncopateDB with Docker
+
+SyncopateDB is available as an official Docker image, making deployment quick and easy across different environments. The image is optimized for performance and security, with multi-architecture support for both amd64 and arm64 platforms.
+
+## Quick Start
+
+To get SyncopateDB up and running with default settings, simply run:
+
+bash
+
+```bash
+docker run -d --name syncopatedb -p 8080:8080 -v syncopate-data:/data phillarmonic/syncopatedb
+```
+
+This will:
+
+- Start SyncopateDB in detached mode
+- Name the container "syncopatedb"
+- Map port 8080 from the container to port 8080 on your host
+- Create a Docker volume named "syncopate-data" for persistent storage
+
+## Configuration Options
+
+You can configure SyncopateDB using environment variables:
+
+bash
+
+```bash
+docker run -d --name syncopatedb \
+  -p 8080:8080 \
+  -v syncopate-data:/data \
+  -e PORT=8080 \
+  -e DEBUG=false \
+  -e LOG_LEVEL=info \
+  -e ENABLE_WAL=true \
+  -e ENABLE_ZSTD=true \
+  -e COLORIZED_LOGS=false \
+  phillarmonic/syncopatedb
+```
+
+### Available Environment Variables
+
+- `PORT`: Server port (default: 8080)
+- `DEBUG`: Enable verbose debug mode (default: false)
+- `LOG_LEVEL`: Logging level (debug, info, warn, error)
+- `ENABLE_WAL`: Enable Write-Ahead Logging (default: true)
+- `ENABLE_ZSTD`: Enable ZSTD compression (default: true)
+- `COLORIZED_LOGS`: Enable colorized logging (default: false)
+
+### Command-line Arguments
+
+You can also pass command-line arguments to the container:
+
+bash
+
+```bash
+docker run -d --name syncopatedb \
+  -p 8080:8080 \
+  -v syncopate-data:/data \
+  phillarmonic/syncopatedb \
+  --port 8080 \
+  --log-level info \
+  --cache-size 20000 \
+  --snapshot-interval 300
+```
+
+## Data Persistence
+
+SyncopateDB stores all data in the `/data` directory inside the container. For persistence, mount this directory to a volume or host path:
+
+### Using a Named Volume (Recommended)
+
+bash
+
+```bash
+docker run -d --name syncopatedb \
+  -p 8080:8080 \
+  -v syncopate-data:/data \
+  phillarmonic/syncopatedb
+```
+
+### Using a Host Directory
+
+bash
+
+```bash
+docker run -d --name syncopatedb \
+  -p 8080:8080 \
+  -v /path/on/host:/data \
+  phillarmonic/syncopatedb
+```
+
+## Docker Compose Example
+
+For production deployments, a Docker Compose configuration is recommended:
+
+yaml
+
+```yaml
+services:
+  syncopatedb:
+    image: phillarmonic/syncopatedb:latest
+    container_name: syncopatedb
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - syncopate-data:/data
+    environment:
+      - PORT=8080
+      - LOG_LEVEL=info
+      - ENABLE_WAL=true
+      - ENABLE_ZSTD=true
+      - COLORIZED_LOGS=false
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  syncopate-data:
+```
+
+Save this to a file named `docker-compose.yml` and run:
+
+bash
+
+```bash
+docker-compose up -d
+```
+
+## Security Considerations
+
+The SyncopateDB Docker image:
+
+- Runs as a non-root user (`syncopate`)
+- Has a minimal footprint using Alpine Linux
+- Contains only the necessary dependencies
+
+## Accessing the API
+
+Once the container is running, you can access the SyncopateDB API at:
+
+```
+http://localhost:8080/
+```
+
+Verify that SyncopateDB is running by checking the health endpoint:
+
+bash
+
+```bash
+curl http://localhost:8080/health
+```
+
+You should receive a response like:
+
+json
+
+```json
+{"status":"ok"}
+```
+
+## Container Maintenance
+
+### Viewing Logs
+
+bash
+
+```bash
+docker logs syncopatedb
+```
+
+### Stopping the Container
+
+bash
+
+```bash
+docker stop syncopatedb
+```
+
+### Upgrading to a New Version
+
+bash
+
+```bash
+docker pull phillarmonic/syncopatedb:latest
+docker stop syncopatedb
+docker rm syncopatedb
+docker run -d --name syncopatedb -p 8080:8080 -v syncopate-data:/data phillarmonic/syncopatedb
+```
+
+### Backing Up Data
+
+The database data is stored in the mounted volume. To create a backup:
+
+bash
+
+```bash
+# Stop the container before backing up
+docker stop syncopatedb
+
+# For named volumes
+docker run --rm -v syncopate-data:/data -v $(pwd):/backup alpine tar -czvf /backup/syncopatedb-backup.tar.gz /data
+
+# For host directories
+tar -czvf syncopatedb-backup.tar.gz /path/on/host
+
+# Restart the container
+docker start syncopatedb
+```
+
+
 
 ## Building from Source
 
