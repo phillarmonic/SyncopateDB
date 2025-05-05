@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # Description:
-# This script searches for all .go files and go.mod file within the current directory and its subdirectories,
+# This script searches for all .go files and go.mod file within a specified directory and its subdirectories,
 # excluding the 'bundle' directory itself, the '.git', '.idea', and '.vscode' directories.
 # It then empties the 'bundle' directory if it exists (or creates it if it doesn't),
 # copies all found .go files and go.mod into the 'bundle' directory,
@@ -14,6 +14,18 @@ set -e
 BUNDLE_DIR="bundle"
 # Define the structure file name
 STRUCTURE_FILE="$BUNDLE_DIR/files_folders_structure.txt"
+# Default root directory is current directory
+ROOT_DIR="."
+
+# Parse command line arguments
+if [ $# -gt 0 ]; then
+    ROOT_DIR="$1"
+    # Check if the provided directory exists
+    if [ ! -d "$ROOT_DIR" ]; then
+        echo "Error: Directory '$ROOT_DIR' does not exist."
+        exit 1
+    fi
+fi
 
 # Function to display messages
 echo_msg() {
@@ -30,8 +42,8 @@ else
 fi
 
 # Step 2: Find all .go files excluding specific directories
-echo_msg "Searching for .go files..."
-GO_FILES=$(find . -path "./$BUNDLE_DIR" -prune -o -path "./.git" -prune -o -path "./.idea" -prune -o -path "./.vscode" -prune -o -type f -name "*.go" -print)
+echo_msg "Searching for .go files in '$ROOT_DIR'..."
+GO_FILES=$(find "$ROOT_DIR" -path "./$BUNDLE_DIR" -prune -o -path "./.git" -prune -o -path "./.idea" -prune -o -path "./.vscode" -prune -o -type f -name "*.go" -print)
 
 # Check if any .go files were found
 if [ -z "$GO_FILES" ]; then
@@ -46,10 +58,10 @@ else
 fi
 
 # Step 4: Find and copy go.mod file if it exists
-echo_msg "Searching for go.mod file..."
-if [ -f "go.mod" ]; then
-    cp "go.mod" "$BUNDLE_DIR/"
-    echo_msg "Copied: go.mod"
+echo_msg "Searching for go.mod file in '$ROOT_DIR'..."
+if [ -f "$ROOT_DIR/go.mod" ]; then
+    cp "$ROOT_DIR/go.mod" "$BUNDLE_DIR/"
+    echo_msg "Copied: $ROOT_DIR/go.mod"
 else
     echo_msg "No go.mod file found."
 fi
@@ -59,16 +71,16 @@ echo_msg "Creating folder structure file..."
 {
     echo "Folder Structure:"
     echo "================="
-    find . -path "./$BUNDLE_DIR" -prune -o -path "./.git" -prune -o -path "./.idea" -prune -o -path "./.vscode" -prune -o -type d -print | sort
+    find "$ROOT_DIR" -path "./$BUNDLE_DIR" -prune -o -path "./.git" -prune -o -path "./.idea" -prune -o -path "./.vscode" -prune -o -type d -print | sort
 
     echo -e "\nFile Listing:"
     echo "============="
-    find . -path "./$BUNDLE_DIR" -prune -o -path "./.git" -prune -o -path "./.idea" -prune -o -path "./.vscode" -prune -o -type f -print | sort
+    find "$ROOT_DIR" -path "./$BUNDLE_DIR" -prune -o -path "./.git" -prune -o -path "./.idea" -prune -o -path "./.vscode" -prune -o -type f -print | sort
 
     echo -e "\nBundled Files:"
     echo "=============="
     ls -la "$BUNDLE_DIR"
 } > "$STRUCTURE_FILE"
 
-echo_msg "All files have been bundled successfully."
+echo_msg "All files have been bundled successfully from '$ROOT_DIR'."
 echo_msg "Folder structure and file listing saved to $STRUCTURE_FILE"
