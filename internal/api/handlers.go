@@ -739,3 +739,63 @@ func (s *Server) handleDebugSchema(w http.ResponseWriter, r *http.Request) {
 		"entity_count": count,
 	}, true)
 }
+
+// handleCountQuery handles count queries without returning the actual data
+func (s *Server) handleCountQuery(w http.ResponseWriter, r *http.Request) {
+	var queryOpts datastore.QueryOptions
+	if err := json.NewDecoder(r.Body).Decode(&queryOpts); err != nil {
+		s.respondWithError(w, http.StatusBadRequest, "Invalid request payload")
+		return
+	}
+	defer r.Body.Close()
+
+	// Log the request if in debug mode
+	if s.config.DebugMode {
+		s.logger.WithFields(logrus.Fields{
+			"entityType": queryOpts.EntityType,
+			"filters":    len(queryOpts.Filters),
+			"joins":      len(queryOpts.Joins),
+		}).Debug("Executing count query")
+	}
+
+	// Track execution time
+	startTime := time.Now()
+
+	// Execute the auto-optimizing count query
+	count, err := s.queryService.ExecuteCountQuery(queryOpts)
+	if err != nil {
+		s.respondWithError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Calculate execution time
+	executionTime := time.Since(startTime)
+
+	// Determine query type
+	queryType := "simple"
+	if len(queryOpts.Joins) > 0 {
+		queryType = "join"
+	}
+
+	// Create response
+	response := CountResponse{
+		Count:         count,
+		EntityType:    queryOpts.EntityType,
+		QueryType:     queryType,
+		FiltersCount:  len(queryOpts.Filters),
+		JoinsApplied:  len(queryOpts.Joins),
+		ExecutionTime: executionTime.String(),
+	}
+
+	s.respondWithJSON(w, http.StatusOK, response)
+}
+
+// CountResponse structure for count query responses
+type CountResponse struct {
+	Count         int    `json:"count"`
+	EntityType    string `json:"entityType"`
+	QueryType     string `json:"queryType"`
+	FiltersCount  int    `json:"filtersCount"`
+	JoinsApplied  int    `json:"joinsApplied"`
+	ExecutionTime string `json:"executionTime,omitempty"`
+}
