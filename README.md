@@ -1050,6 +1050,12 @@ The SyncopateDB Docker image:
 - Has a minimal footprint using Alpine Linux
 - Contains only the necessary dependencies
 
+## Deployment limitations
+
+SyncopateDB uses a monolithic architecture, so, only a single container can access the volume with the data at a time. This is due to the nature of the current locking system in SyncopateDB and its underlying storage engine.
+
+A clustered version with a distributed locking system is in the works and it's due to be release on version 1.0.0
+
 ## Accessing the API
 
 Once the container is running, you can access the SyncopateDB API at:
