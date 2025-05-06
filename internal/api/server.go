@@ -134,6 +134,9 @@ func (s *Server) setupRoutes() {
 	api.HandleFunc("/query", s.handleQuery).Methods(http.MethodPost)
 	api.HandleFunc("/query/join", s.handleNestedQuery).Methods(http.MethodPost)
 
+	// Counting
+	api.HandleFunc("/query/count", s.handleCountQuery).Methods(http.MethodPost)
+
 	// Health check
 	s.router.HandleFunc("/health", s.handleHealthCheck).Methods(http.MethodGet)
 

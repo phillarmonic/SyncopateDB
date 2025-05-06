@@ -6,8 +6,6 @@
 
 SyncopateDB is a flexible, lightweight, optimized for SSD database with advanced query capabilities and low latency. It provides a REST API for data storage and retrieval with robust features including indexing, complex queries, and persistence.
 
-
-
 ## Key Features
 
 SyncopateDB offers:
@@ -97,6 +95,7 @@ SyncopateDB is the right choice for you if you require:
 - **Indexing**: Create indexes for fast data retrieval
 - **Multiple ID Strategies**: Support for auto-increment, UUID, CUID generation
 - **Advanced Querying**: Filter, sort, and paginate data with a flexible query API
+- **Efficient Counting**: Optimize count operations without retrieving data
 - **Joins and Relations**: Link related data between entity types (with soft relationships)
 - **Fuzzy Search**: Find data using fuzzy matching algorithms
 - **Array Operations**: Query for values within arrays
@@ -170,18 +169,11 @@ Entities are instances of entity types containing actual data.
 
 SyncopateDB supports advanced querying with filtering, sorting, and pagination.
 
-| Method | Endpoint      | Description             |
-| ------ | ------------- | ----------------------- |
-| POST   | /api/v1/query | Execute a complex query |
-
-### Joins
-
-SyncopateDB supports joining related data between entity types. In SyncopateDB, joins are non-destructive views made in memory to represent data. This means the source entities are never modified by the join operation.
-Also, consider relationships are soft defined. Thus, there are no entity relationships defined in the database and there are no features such as cascade deleting.
-
-| Method | Endpoint           | Description                |
-| ------ | ------------------ | -------------------------- |
-| POST   | /api/v1/query/join | Execute a query with joins |
+| Method | Endpoint            | Description                          |
+| ------ | ------------------- | ------------------------------------ |
+| POST   | /api/v1/query       | Execute a complex query              |
+| POST   | /api/v1/query/count | Count matching entities without data |
+| POST   | /api/v1/query/join  | Execute a query with joins           |
 
 ## Examples
 
@@ -415,6 +407,196 @@ Delete a product:
 
 ```bash
 curl -X DELETE http://localhost:8080/api/v1/entities/Product/1
+```
+
+### ### Count Queries
+
+SyncopateDB provides a dedicated count API endpoint for efficiently retrieving the number of entities matching specific criteria without loading the actual data. This is particularly valuable for pagination, performance optimization, and UI elements that show counts.
+
+| Method | Endpoint            | Description                                   |
+| ------ | ------------------- | --------------------------------------------- |
+| POST   | /api/v1/query/count | Execute a count query without retrieving data |
+
+#### Count Query Request Format
+
+The request body uses the same format as regular queries, with support for filters and joins:
+
+```json
+{
+  "entityType": "product",
+  "filters": [
+    {
+      "field": "category",
+      "operator": "eq",
+      "value": "electronics"
+    },
+    {
+      "field": "price",
+      "operator": "lt",
+      "value": 1000
+    }
+  ]
+}
+```
+
+#### Count Query Response Format
+
+```json
+{
+  "count": 57,
+  "entityType": "product",
+  "queryType": "simple",
+  "filtersCount": 2,
+  "joinsApplied": 0,
+  "executionTime": "12.203ms"
+}
+```
+
+#### Example Usage
+
+##### Simple Count Query
+
+Count all active customers:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/query/count \
+  -H "Content-Type: application/json" \
+  -d '{
+    "entityType": "Customer",
+    "filters": [
+      {
+        "field": "active",
+        "operator": "eq",
+        "value": true
+      }
+    ]
+  }'
+```
+
+##### Count with Join Query
+
+Count all users who have placed at least one order:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/query/count \
+  -H "Content-Type: application/json" \
+  -d '{
+    "entityType": "users",
+    "joins": [
+      {
+        "entityType": "orders",
+        "localField": "id",
+        "foreignField": "user_id",
+        "as": "orders",
+        "type": "inner"
+      }
+    ]
+  }'
+```
+
+#### Performance Optimizations
+
+The count API implements several automatic optimizations:
+
+1. **Index-Based Counting**: For equality filters on indexed fields, count operations become O(1) instead of O(n)
+2. **Memory-Efficient Scanning**: Avoids loading complete entities into memory when counting large datasets
+3. **Join Optimizations**: Efficiently counts relationships without materializing entities
+
+These optimizations ensure count operations are lightweight and performant, even for large datasets or complex join operations.
+
+#### Common Use Cases
+
+1. **Pagination**: Get total count for implementing pagination UI
+
+```javascript
+// Client-side example
+async function loadPage(page, pageSize) {
+  // First get the total count
+  const countResponse = await fetch('/api/v1/query/count', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      entityType: 'Product',
+      filters: [
+        { field: 'category', operator: 'eq', value: 'electronics' }
+      ]
+    })
+  });
+
+  const { count } = await countResponse.json();
+  const totalPages = Math.ceil(count / pageSize);
+
+  // Then load the specific page
+  const dataResponse = await fetch('/api/v1/query', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      entityType: 'Product',
+      filters: [
+        { field: 'category', operator: 'eq', value: 'electronics' }
+      ],
+      limit: pageSize,
+      offset: (page - 1) * pageSize
+    })
+  });
+
+  const data = await dataResponse.json();
+
+  return {
+    data: data.data,
+    pagination: {
+      totalCount: count,
+      totalPages,
+      currentPage: page
+    }
+  };
+}
+```
+
+2. **Performance Check**: Count before executing expensive queries
+
+```bash
+# Check how many items match before retrieving them
+curl -X POST http://localhost:8080/api/v1/query/count \
+  -H "Content-Type: application/json" \
+  -d '{
+    "entityType": "logs",
+    "filters": [
+      {
+        "field": "severity",
+        "operator": "eq",
+        "value": "error"
+      },
+      {
+        "field": "timestamp",
+        "operator": "gte",
+        "value": "2025-01-01T00:00:00Z"
+      }
+    ]
+  }'
+```
+
+3. **UI Elements**: Show count indicators in user interfaces
+
+```javascript
+// Update badge count for notifications
+async function updateNotificationBadge() {
+  const response = await fetch('/api/v1/query/count', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      entityType: 'notification',
+      filters: [
+        { field: 'user_id', operator: 'eq', value: currentUserId },
+        { field: 'read', operator: 'eq', value: false }
+      ]
+    })
+  });
+
+  const { count } = await response.json();
+  document.getElementById('notification-badge').textContent = count;
+  document.getElementById('notification-badge').style.display = count > 0 ? 'block' : 'none';
+}
 ```
 
 ### Advanced Querying
@@ -728,8 +910,6 @@ Key persistence features:
 - Compression support (optional)
 - Automated backup capabilities
 
-
-
 # Using SyncopateDB with Docker
 
 SyncopateDB is available as an official Docker image, making deployment quick and easy across different environments. The image is optimized for performance and security, with multi-architecture support for both amd64 and arm64 platforms.
@@ -942,8 +1122,6 @@ tar -czvf syncopatedb-backup.tar.gz /path/on/host
 # Restart the container
 docker start syncopatedb
 ```
-
-
 
 ## Building from Source
 

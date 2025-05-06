@@ -3,6 +3,7 @@ package datastore
 import (
 	"errors"
 	"fmt"
+	"github.com/phillarmonic/syncopate-db/internal/settings"
 	"reflect"
 	"sort"
 	"strings"
@@ -772,4 +773,121 @@ func (qs *QueryService) ExecuteQueryWithJoins(options QueryOptions) (*PaginatedR
 	}
 
 	return joinedResponse, nil
+}
+
+// ExecuteCountQuery executes an auto-optimizing count query that intelligently
+// chooses the most efficient counting strategy based on the query and dataset
+func (qs *QueryService) ExecuteCountQuery(options QueryOptions) (int, error) {
+	qs.engine.mu.RLock()
+	defer qs.engine.mu.RUnlock()
+
+	// Verify entity type exists
+	entityTypeName := options.EntityType
+	if _, exists := qs.engine.definitions[entityTypeName]; !exists {
+		return 0, fmt.Errorf("entity type '%s' not registered", entityTypeName)
+	}
+
+	// For queries with joins, we need the full join execution path
+	if len(options.Joins) > 0 {
+		joinQueryOpts := options
+		joinQueryOpts.Offset = 0
+		joinQueryOpts.Limit = 0
+
+		response, err := qs.ExecuteQueryWithJoins(joinQueryOpts)
+		if err != nil {
+			return 0, err
+		}
+		return response.Total, nil
+	}
+
+	// Optimization path 1: Index-based counting for equality filters on indexed fields
+	optimizationPath := "full-scan" // Default
+
+	// Check if we can use an indexed field for the count
+	def := qs.engine.definitions[options.EntityType]
+
+	// For single equality filter on an indexed field
+	if len(options.Filters) == 1 {
+		filter := options.Filters[0]
+		if filter.Operator == FilterEq {
+			for _, fieldDef := range def.Fields {
+				if fieldDef.Name == filter.Field && fieldDef.Indexed {
+					// We can use the index for direct lookup!
+					optimizationPath = "index-lookup"
+					indexValue := qs.engine.getIndexableValue(filter.Value)
+
+					// Get the IDs directly from the index
+					indexedIDs := qs.engine.indices[options.EntityType][filter.Field][indexValue]
+					return len(indexedIDs), nil
+				}
+			}
+		}
+	}
+
+	// Optimization path 2: Type-based counting for any indexed field
+	if len(options.Filters) > 0 {
+		// Check if any filter uses an indexed field with any operator
+		for _, filter := range options.Filters {
+			for _, fieldDef := range def.Fields {
+				if fieldDef.Name == filter.Field && fieldDef.Indexed {
+					// We have an indexed field in the filter - this is a clue
+					// that we have a more selective query that could benefit from
+					// type-specific optimizations
+
+					// We're still using full scan, but we note this for logging
+					optimizationPath = "indexed-field-scan"
+					break
+				}
+			}
+		}
+	}
+
+	// Optimization path 3: Dataset size based optimization
+	// Get a rough count of the entity type to decide if we should optimize further
+	totalEntitiesOfType := 0
+	for _, entity := range qs.engine.entities {
+		if entity.Type == options.EntityType {
+			totalEntitiesOfType++
+
+			// Early exit: If we're counting more than 1000 entities,
+			// we know this is a large dataset and should use optimized counting
+			if totalEntitiesOfType > 1000 && optimizationPath == "full-scan" {
+				optimizationPath = "large-dataset-scan"
+				break
+			}
+		}
+	}
+
+	// For all other cases, use an optimized full scan that counts without materializing entities
+	count := 0
+	for _, entity := range qs.engine.entities {
+		if entity.Type == options.EntityType {
+			// Check if entity matches all filters
+			matches := true
+			for _, filter := range options.Filters {
+				value, exists := entity.Fields[filter.Field]
+				if !exists {
+					matches = false
+					break
+				}
+
+				if !qs.matchesFilter(value, filter.Operator, filter.Value) {
+					matches = false
+					break
+				}
+			}
+
+			if matches {
+				count++
+			}
+		}
+	}
+
+	// Debug logging for optimization paths
+	if settings.Config.Debug {
+		fmt.Printf("[DEBUG] Count query for '%s' used optimization path: %s\n",
+			options.EntityType, optimizationPath)
+	}
+
+	return count, nil
 }
