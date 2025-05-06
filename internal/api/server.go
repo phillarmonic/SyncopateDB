@@ -133,7 +133,7 @@ func (s *Server) setupRoutes() {
 	api.HandleFunc("/entity-types", s.handleGetEntityTypes).Methods(http.MethodGet)
 	api.HandleFunc("/entity-types", s.handleCreateEntityType).Methods(http.MethodPost)
 	api.HandleFunc("/entity-types/{name}", s.handleGetEntityType).Methods(http.MethodGet)
-	api.HandleFunc("/entity-types/{name}", s.handleUpdateEntityType).Methods(http.MethodPut) // New endpoint
+	api.HandleFunc("/entity-types/{name}", s.handleUpdateEntityType).Methods(http.MethodPut)
 
 	// Entities
 	api.HandleFunc("/entities/{type}", s.handleListEntities).Methods(http.MethodGet)
