@@ -179,7 +179,7 @@ func FormatBytes(bytes uint64) string {
 	}
 }
 
-// GetMemoryStatsFormatted returns memory statistics in a human-readable format
+// GetMemoryStatsFormatted needs to be updated in memory_stats.go to accept a custom uptime
 func (mm *MemoryMonitor) GetMemoryStatsFormatted() map[string]string {
 	stats := mm.GetStats()
 
@@ -188,7 +188,7 @@ func (mm *MemoryMonitor) GetMemoryStatsFormatted() map[string]string {
 		"peak":         FormatBytes(stats.Peak),
 		"average":      FormatBytes(stats.Average),
 		"readings":     fmt.Sprintf("%d", stats.Readings),
-		"uptime":       time.Since(stats.StartedAt).String(),
+		"uptime":       time.Since(stats.StartedAt).String(), // This will be overridden in handleMemoryStats
 		"last_updated": stats.LastUpdated.Format(time.RFC3339),
 	}
 }

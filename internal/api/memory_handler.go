@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/phillarmonic/syncopate-db/internal/monitoring"
@@ -29,6 +30,12 @@ type TimeSeriesResponse struct {
 func (s *Server) handleMemoryStats(w http.ResponseWriter, r *http.Request) {
 	format := r.URL.Query().Get("format")
 
+	// Get stats from the memory monitor
+	stats := s.memoryMonitor.GetStats()
+
+	// Format the uptime in a human-readable way
+	formattedUptime := formatUptime(time.Since(stats.StartedAt))
+
 	switch format {
 	case "raw":
 		// Return raw bytes values for programmatic use
@@ -49,11 +56,14 @@ func (s *Server) handleMemoryStats(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "Peak:    %s\n", stats["peak"])
 		fmt.Fprintf(w, "Average: %s\n", stats["average"])
 		fmt.Fprintf(w, "Samples: %s\n", stats["readings"])
-		fmt.Fprintf(w, "Uptime:  %s\n", stats["uptime"])
+		fmt.Fprintf(w, "Uptime:  %s\n", formattedUptime)
 		fmt.Fprintf(w, "Updated: %s\n", stats["last_updated"])
 	default:
-		// Default to formatted values in JSON
-		s.respondWithJSON(w, http.StatusOK, s.memoryMonitor.GetMemoryStatsFormatted())
+		// Default to formatted values in JSON with human-readable uptime
+		formattedStats := s.memoryMonitor.GetMemoryStatsFormatted()
+		formattedStats["uptime"] = formattedUptime
+
+		s.respondWithJSON(w, http.StatusOK, formattedStats)
 	}
 }
 
@@ -81,11 +91,38 @@ func (s *Server) handleVisualizationHTML(w http.ResponseWriter, r *http.Request)
         button:hover { background-color: #1e5290; }
         .auto-refresh { display: flex; align-items: center; justify-content: center; margin-top: 10px; }
         .refresh-label { margin-right: 10px; }
+        
+        /* Connection alert styles */
+        .connection-alert {
+            background-color: #f8d7da;
+            color: #721c24;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            border: 1px solid #f5c6cb;
+            display: none; /* Hidden by default */
+            text-align: center;
+            font-weight: bold;
+        }
+        .connection-alert.visible {
+            display: block;
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.8; }
+            100% { opacity: 1; }
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>SyncopateDB Memory Usage Dashboard</h1>
+        
+        <!-- Connection alert box -->
+        <div id="connection-alert" class="connection-alert">
+            <span>⚠️ Connection Error: Unable to connect to the server. Data may be stale. Retrying... ⚠️</span>
+        </div>
         
         <div class="stats-grid">
             <div class="stat-card">
@@ -112,7 +149,8 @@ func (s *Server) handleVisualizationHTML(w http.ResponseWriter, r *http.Request)
                 <span class="refresh-label">Auto-refresh:</span>
                 <select id="refresh-interval">
                     <option value="0">Off</option>
-                    <option value="5" selected>5 seconds</option>
+					<option value="1" selected>1 second</option>
+                    <option value="5">5 seconds</option>
                     <option value="15">15 seconds</option>
                     <option value="30">30 seconds</option>
                     <option value="60">1 minute</option>
@@ -130,9 +168,14 @@ func (s *Server) handleVisualizationHTML(w http.ResponseWriter, r *http.Request)
         let memoryChart;
         let refreshInterval;
         let timeSeriesData = [];
+        let connectionErrorCount = 0;
+        let connectionAlert = document.getElementById('connection-alert');
         
         // Initialize the dashboard
         document.addEventListener('DOMContentLoaded', function() {
+            // Get references
+            connectionAlert = document.getElementById('connection-alert');
+            
             // Initial data load
             loadMemoryStats();
             loadTimeSeriesData();
@@ -168,28 +211,167 @@ func (s *Server) handleVisualizationHTML(w http.ResponseWriter, r *http.Request)
             }
         }
         
+        // Handle connection errors
+        function handleConnectionError(error) {
+            console.error('Connection error:', error);
+            connectionErrorCount++;
+            
+            // Show the alert after consecutive errors
+            if (connectionErrorCount >= 2) {
+                connectionAlert.classList.add('visible');
+            }
+        }
+        
+        // Reset connection errors
+        function resetConnectionErrors() {
+            connectionErrorCount = 0;
+            connectionAlert.classList.remove('visible');
+        }
+        
+        // Format uptime in a more readable format (months, weeks, days, hours, minutes, seconds)
+        function formatUptime(uptimeString) {
+            // Parse the uptime string which might be in format like "2160h41m15.123456s" or "90d5h30m15s"
+            // First, let's extract all time components using regex
+            const regex = /(\d+)([a-z]+)/g;
+            let match;
+            
+            // Time values in seconds
+            const second = 1;
+            const minute = 60 * second;
+            const hour = 60 * minute;
+            const day = 24 * hour;
+            const week = 7 * day;
+            const month = 30 * day; // Approximation
+            
+            // Initialize accumulators
+            let totalSeconds = 0;
+            
+            // Extract and convert all time components to seconds
+            while ((match = regex.exec(uptimeString)) !== null) {
+                const value = parseInt(match[1], 10);
+                const unit = match[2];
+                
+                switch(unit) {
+                    case 's':
+                        totalSeconds += value;
+                        break;
+                    case 'm':
+                    case 'min':
+                        totalSeconds += value * minute;
+                        break;
+                    case 'h':
+                        totalSeconds += value * hour;
+                        break;
+                    case 'd':
+                        totalSeconds += value * day;
+                        break;
+                    case 'w':
+                        totalSeconds += value * week;
+                        break;
+                    case 'mo':
+                        totalSeconds += value * month;
+                        break;
+                }
+            }
+            
+            // If we couldn't parse anything, return the original string
+            if (totalSeconds === 0) {
+                return uptimeString;
+            }
+            
+            // Calculate the time components
+            const months = Math.floor(totalSeconds / month);
+            totalSeconds %= month;
+            
+            const weeks = Math.floor(totalSeconds / week);
+            totalSeconds %= week;
+            
+            const days = Math.floor(totalSeconds / day);
+            totalSeconds %= day;
+            
+            const hours = Math.floor(totalSeconds / hour);
+            totalSeconds %= hour;
+            
+            const minutes = Math.floor(totalSeconds / minute);
+            totalSeconds %= minute;
+            
+            const seconds = Math.floor(totalSeconds);
+            
+            // Build the formatted string, omitting zero values
+            const parts = [];
+            
+            if (months > 0) {
+                parts.push(months + (months === 1 ? ' month' : ' months'));
+            }
+            
+            if (weeks > 0) {
+                parts.push(weeks + (weeks === 1 ? ' week' : ' weeks'));
+            }
+            
+            if (days > 0) {
+                parts.push(days + (days === 1 ? ' day' : ' days'));
+            }
+            
+            if (hours > 0) {
+                parts.push(hours + (hours === 1 ? ' hour' : ' hours'));
+            }
+            
+            if (minutes > 0) {
+                parts.push(minutes + (minutes === 1 ? ' minute' : ' minutes'));
+            }
+            
+            if (seconds > 0 || parts.length === 0) {
+                parts.push(seconds + (seconds === 1 ? ' second' : ' seconds'));
+            }
+            
+            return parts.join(', ');
+        }
+        
         // Load memory statistics
         function loadMemoryStats() {
             fetch('/api/v1/memory')
-                .then(response => response.json())
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Network response was not ok: ' + response.status);
+                    }
+                    return response.json();
+                })
                 .then(data => {
+                    // Reset connection errors on successful response
+                    resetConnectionErrors();
+                    
                     document.getElementById('current-memory').textContent = data.current;
                     document.getElementById('peak-memory').textContent = data.peak;
                     document.getElementById('average-memory').textContent = data.average;
-                    document.getElementById('uptime').textContent = data.uptime;
+                    
+                    // Format the uptime
+                    const formattedUptime = formatUptime(data.uptime);
+                    document.getElementById('uptime').textContent = formattedUptime;
                 })
-                .catch(error => console.error('Error fetching memory stats:', error));
+                .catch(error => {
+                    handleConnectionError(error);
+                });
         }
         
         // Load time series data and update chart
         function loadTimeSeriesData() {
             fetch('/api/v1/memory?format=timeseries')
-                .then(response => response.json())
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Network response was not ok: ' + response.status);
+                    }
+                    return response.json();
+                })
                 .then(data => {
+                    // Reset connection errors on successful response
+                    resetConnectionErrors();
+                    
                     timeSeriesData = data;
                     updateChart();
                 })
-                .catch(error => console.error('Error fetching time series data:', error));
+                .catch(error => {
+                    handleConnectionError(error);
+                });
         }
         
         // Update or initialize the chart
@@ -323,4 +505,104 @@ func (s *Server) handleMemoryConfig(w http.ResponseWriter, r *http.Request) {
 		"status":  "ok",
 		"message": "Memory monitor configuration updated",
 	})
+}
+
+func formatUptime(d time.Duration) string {
+	// Constants for time unit calculations
+	const (
+		second = 1
+		minute = 60 * second
+		hour   = 60 * minute
+		day    = 24 * hour
+		week   = 7 * day
+		month  = 30 * day  // approximate
+		year   = 365 * day // approximate
+	)
+
+	// Convert duration to seconds
+	totalSeconds := int64(d.Seconds())
+
+	// Calculate time components
+	years := totalSeconds / int64(year)
+	totalSeconds %= int64(year)
+
+	months := totalSeconds / int64(month)
+	totalSeconds %= int64(month)
+
+	weeks := totalSeconds / int64(week)
+	totalSeconds %= int64(week)
+
+	days := totalSeconds / int64(day)
+	totalSeconds %= int64(day)
+
+	hours := totalSeconds / int64(hour)
+	totalSeconds %= int64(hour)
+
+	minutes := totalSeconds / int64(minute)
+	totalSeconds %= int64(minute)
+
+	seconds := totalSeconds
+
+	// Build the formatted string, omitting zero values
+	var parts []string
+
+	if years > 0 {
+		if years == 1 {
+			parts = append(parts, "1 year")
+		} else {
+			parts = append(parts, fmt.Sprintf("%d years", years))
+		}
+	}
+
+	if months > 0 {
+		if months == 1 {
+			parts = append(parts, "1 month")
+		} else {
+			parts = append(parts, fmt.Sprintf("%d months", months))
+		}
+	}
+
+	if weeks > 0 {
+		if weeks == 1 {
+			parts = append(parts, "1 week")
+		} else {
+			parts = append(parts, fmt.Sprintf("%d weeks", weeks))
+		}
+	}
+
+	if days > 0 {
+		if days == 1 {
+			parts = append(parts, "1 day")
+		} else {
+			parts = append(parts, fmt.Sprintf("%d days", days))
+		}
+	}
+
+	if hours > 0 {
+		if hours == 1 {
+			parts = append(parts, "1 hour")
+		} else {
+			parts = append(parts, fmt.Sprintf("%d hours", hours))
+		}
+	}
+
+	if minutes > 0 {
+		if minutes == 1 {
+			parts = append(parts, "1 minute")
+		} else {
+			parts = append(parts, fmt.Sprintf("%d minutes", minutes))
+		}
+	}
+
+	// Always include seconds if no other parts, or if seconds > 0
+	if seconds > 0 || len(parts) == 0 {
+		if seconds == 1 {
+			parts = append(parts, "1 second")
+		} else {
+			parts = append(parts, fmt.Sprintf("%d seconds", seconds))
+		}
+	}
+
+	// Join all parts with commas
+	return strings.Join(parts, ", ")
 }

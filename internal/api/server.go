@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -23,15 +24,16 @@ import (
 
 // ServerConfig holds configuration for the REST API server
 type ServerConfig struct {
-	Port          int
-	ReadTimeout   time.Duration
-	WriteTimeout  time.Duration
-	IdleTimeout   time.Duration
-	LogLevel      logrus.Level
-	RateLimit     int           // Requests per minute per IP
-	RateWindow    time.Duration // Rate limit window (usually 1 minute)
-	DebugMode     bool          // Flag to enable debug mode (disables goroutines)
-	ColorizedLogs bool          // Flag to enable colorized log output
+	Port           int
+	ReadTimeout    time.Duration
+	WriteTimeout   time.Duration
+	IdleTimeout    time.Duration
+	LogLevel       logrus.Level
+	RateLimit      int           // Requests per minute per IP
+	RateWindow     time.Duration // Rate limit window (usually 1 minute)
+	DebugMode      bool          // Flag to enable debug mode (disables goroutines)
+	ColorizedLogs  bool          // Flag to enable colorized log output
+	IgnoreLogPaths []string      // Paths to ignore in access logs
 }
 
 // DefaultServerConfig returns a default server configuration
@@ -42,15 +44,16 @@ func DefaultServerConfig() ServerConfig {
 	}
 
 	return ServerConfig{
-		Port:          settings.Config.Port,
-		ReadTimeout:   15 * time.Second,
-		WriteTimeout:  15 * time.Second,
-		IdleTimeout:   60 * time.Second,
-		LogLevel:      logLevel,
-		RateLimit:     100,                           // 100 requests per minute per IP
-		RateWindow:    time.Minute,                   // 1 minute window
-		DebugMode:     settings.Config.Debug,         // Debug mode from settings
-		ColorizedLogs: settings.Config.ColorizedLogs, // Colorized logs from settings
+		Port:           settings.Config.Port,
+		ReadTimeout:    15 * time.Second,
+		WriteTimeout:   15 * time.Second,
+		IdleTimeout:    60 * time.Second,
+		LogLevel:       logLevel,
+		RateLimit:      1500,                                                                  // 1500 requests per second per IP
+		RateWindow:     time.Second,                                                           // 1-second window
+		DebugMode:      settings.Config.Debug,                                                 // Debug mode from settings
+		ColorizedLogs:  settings.Config.ColorizedLogs,                                         // Colorized logs from settings
+		IgnoreLogPaths: []string{"/api/v1/memory", "/api/v1/memory/visualization", "/health"}, // Default ignored paths
 	}
 }
 
@@ -91,6 +94,15 @@ func NewServer(engine common.DatastoreEngine, queryService *datastore.QueryServi
 		} else {
 			logger.Info("ZSTD HTTP response compression enabled")
 		}
+	}
+
+	// Parse ignored log paths from settings if they haven't been explicitly set in config
+	if len(config.IgnoreLogPaths) == 0 && settings.Config.IgnoreLogPaths != "" {
+		config.IgnoreLogPaths = strings.Split(settings.Config.IgnoreLogPaths, ",")
+		for i := range config.IgnoreLogPaths {
+			config.IgnoreLogPaths[i] = strings.TrimSpace(config.IgnoreLogPaths[i])
+		}
+		logger.Infof("Ignoring access logs for paths: %v", config.IgnoreLogPaths)
 	}
 
 	server := &Server{
@@ -260,6 +272,11 @@ func (s *Server) logMiddleware(next http.Handler) http.Handler {
 		// Call the next handler
 		next.ServeHTTP(rw, r)
 
+		// Check if the path should be ignored in logs
+		if s.shouldIgnoreLogging(r.URL.Path) {
+			return
+		}
+
 		// Log the request details
 		duration := time.Since(start)
 		s.logger.WithFields(logrus.Fields{
@@ -356,4 +373,19 @@ func (s *Server) logJoinDebug(message string, fields ...interface{}) {
 	if settings.Config.Debug {
 		s.logger.WithField("component", "join_debug").Debugf(message, fields...)
 	}
+}
+
+func (s *Server) shouldIgnoreLogging(path string) bool {
+	// Check the exact path match
+	for _, ignorePath := range s.config.IgnoreLogPaths {
+		if path == ignorePath {
+			return true
+		}
+
+		// Also check if the path starts with an ignored path (for nested endpoints)
+		if strings.HasPrefix(path, ignorePath+"/") {
+			return true
+		}
+	}
+	return false
 }

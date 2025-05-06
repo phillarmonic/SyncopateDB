@@ -33,10 +33,11 @@ func main() {
 	syncWrites := flag.Bool("sync-writes", true, "Sync writes to disk immediately")
 	debugMode := flag.Bool("debug", settings.Config.Debug, "Enable debug mode (disables goroutines for easier debugging)")
 	colorLogs := flag.Bool("color-logs", settings.Config.ColorizedLogs, "Enable colorized log output")
+	ignoreLogPaths := flag.String("ignore-log-paths", settings.Config.IgnoreLogPaths, "Comma-separated list of paths to ignore in access logs")
 
 	// Memory monitoring flags
 	memoryInterval := flag.Int("memory-interval", 30, "Interval in seconds for memory usage reporting")
-	memoryQuiet := flag.Bool("memory-quiet", false, "If set, only shows memory stats at startup and shutdown")
+	memoryQuiet := flag.Bool("memory-quiet", true, "If set, only shows memory stats at startup and shutdown")
 	memoryVerbose := flag.Bool("memory-verbose", false, "If set, shows detailed memory stats")
 	monitorMemory := flag.Bool("monitor-memory", true, "Enable memory monitoring")
 
@@ -47,6 +48,7 @@ func main() {
 	settings.Config.LogLevel = settings.LogLevel(*logLevel)
 	settings.Config.Debug = *debugMode
 	settings.Config.ColorizedLogs = *colorLogs
+	settings.Config.IgnoreLogPaths = *ignoreLogPaths
 
 	// Set up logging
 	logger := logrus.New()

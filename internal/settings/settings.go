@@ -36,6 +36,7 @@ type Configuration struct {
 	EnableHTTPZSTD bool     `json:"enable_http_zstd"` // New setting for HTTP compression
 	ColorizedLogs  bool     `json:"colorized_logs"`   // Setting for colored logs
 	ServerStarted  bool     `json:"server_started"`   // Setting for server-started status
+	IgnoreLogPaths string   `json:"ignore_log_paths"` // Comma-separated list of paths to ignore in access logs
 }
 
 var Config Configuration
@@ -88,6 +89,7 @@ func init() {
 		EnableHTTPZSTD: loadEnvBool("ENABLE_HTTP_ZSTD", false),
 		ColorizedLogs:  loadEnvBool("COLORIZED_LOGS", true),
 		ServerStarted:  false,
+		IgnoreLogPaths: loadEnvString("IGNORE_LOG_PATHS", "/api/v1/memory,/api/v1/memory/visualization,/health"),
 	}
 
 	if err := Config.Validate(); err != nil {
