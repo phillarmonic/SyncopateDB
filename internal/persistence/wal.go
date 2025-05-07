@@ -407,3 +407,41 @@ func (pe *Engine) applyOperation(store common.DatastoreEngine, op int, entityTyp
 		return fmt.Errorf("unknown operation: %d", op)
 	}
 }
+
+func ensureNoDuplicateInternalFields(def *common.EntityDefinition) {
+	// Check for duplicate internal fields and remove them
+	createdAtIndices := []int{}
+	updatedAtIndices := []int{}
+
+	// Find all instances of internal fields
+	for i, field := range def.Fields {
+		if field.Name == "_created_at" {
+			createdAtIndices = append(createdAtIndices, i)
+		}
+		if field.Name == "_updated_at" {
+			updatedAtIndices = append(updatedAtIndices, i)
+		}
+	}
+
+	// Keep only the first instance of each internal field if duplicates are found
+	// Process in reverse order to avoid index shifting issues
+	if len(createdAtIndices) > 1 {
+		// Sort in descending order to remove from end first
+		sort.Sort(sort.Reverse(sort.IntSlice(createdAtIndices)))
+		// Keep the first one (which will be the last in this reversed slice)
+		for i := 0; i < len(createdAtIndices)-1; i++ {
+			// Remove duplicate field - adjust the slice to exclude this index
+			def.Fields = append(def.Fields[:createdAtIndices[i]], def.Fields[createdAtIndices[i]+1:]...)
+		}
+	}
+
+	if len(updatedAtIndices) > 1 {
+		// Sort in descending order to remove from end first
+		sort.Sort(sort.Reverse(sort.IntSlice(updatedAtIndices)))
+		// Keep the first one (which will be the last in this reversed slice)
+		for i := 0; i < len(updatedAtIndices)-1; i++ {
+			// Remove duplicate field - adjust the slice to exclude this index
+			def.Fields = append(def.Fields[:updatedAtIndices[i]], def.Fields[updatedAtIndices[i]+1:]...)
+		}
+	}
+}

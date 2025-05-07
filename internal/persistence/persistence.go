@@ -331,6 +331,16 @@ func (pe *Engine) LoadLatestSnapshot(store common.DatastoreEngine) error {
 					return fmt.Errorf("failed to decode entity definition: %w", err)
 				}
 
+				// Clean up any duplicate internal fields
+				cleanInternalFields(&def)
+
+				// Mark internal fields
+				for j := range def.Fields {
+					if strings.HasPrefix(def.Fields[j].Name, "_") {
+						def.Fields[j].Internal = true
+					}
+				}
+
 				if err := store.RegisterEntityType(def); err != nil {
 					return fmt.Errorf("failed to register entity type: %w", err)
 				}
@@ -746,6 +756,9 @@ func (pe *Engine) applyOperationWithErrorHandling(store common.DatastoreEngine, 
 			}
 		}
 
+		// Clean up any duplicate internal fields
+		ensureNoDuplicateInternalFields(&def)
+
 		// Mark internal fields
 		for i := range def.Fields {
 			if strings.HasPrefix(def.Fields[i].Name, "_") {
@@ -799,7 +812,93 @@ func (pe *Engine) applyOperationWithErrorHandling(store common.DatastoreEngine, 
 
 		return store.Delete(entityID)
 
+	case OpUpdateEntityType:
+		var def common.EntityDefinition
+		if err := gob.NewDecoder(bytes.NewBuffer(data)).Decode(&def); err != nil {
+			return fmt.Errorf("failed to decode entity definition: %w", err)
+		}
+
+		// For WAL replays, we need to check if the entity type exists
+		_, err := store.GetEntityDefinition(def.Name)
+		if err != nil {
+			// Entity type doesn't exist, register it instead
+
+			// Clean up any duplicate internal fields before registering
+			ensureNoDuplicateInternalFields(&def)
+
+			// Mark internal fields
+			for i := range def.Fields {
+				if strings.HasPrefix(def.Fields[i].Name, "_") {
+					def.Fields[i].Internal = true
+				}
+			}
+
+			return store.RegisterEntityType(def)
+		}
+
+		// Clean up any duplicate internal fields before updating
+		ensureNoDuplicateInternalFields(&def)
+
+		// Mark internal fields
+		for i := range def.Fields {
+			if strings.HasPrefix(def.Fields[i].Name, "_") {
+				def.Fields[i].Internal = true
+			}
+		}
+
+		// Update the entity type definition
+		return store.UpdateEntityType(def)
+
 	default:
 		return fmt.Errorf("unknown operation: %d", op)
+	}
+}
+
+// cleanInternalFields removes duplicate internal fields from entity definitions
+// while preserving all data fields
+func cleanInternalFields(def *common.EntityDefinition) {
+	// Check for duplicate internal fields and remove them
+	createdAtCount := 0
+	updatedAtCount := 0
+
+	// First count how many of each internal field we have
+	for _, field := range def.Fields {
+		if field.Name == "_created_at" {
+			createdAtCount++
+		}
+		if field.Name == "_updated_at" {
+			updatedAtCount++
+		}
+	}
+
+	// If duplicates exist, rebuild the fields slice without them
+	if createdAtCount > 1 || updatedAtCount > 1 {
+		newFields := make([]common.FieldDefinition, 0, len(def.Fields))
+		createdAtAdded := false
+		updatedAtAdded := false
+
+		for _, field := range def.Fields {
+			// For internal fields, only add the first instance
+			if field.Name == "_created_at" {
+				if !createdAtAdded {
+					newFields = append(newFields, field)
+					createdAtAdded = true
+				}
+				continue
+			}
+			if field.Name == "_updated_at" {
+				if !updatedAtAdded {
+					newFields = append(newFields, field)
+					updatedAtAdded = true
+				}
+				continue
+			}
+
+			// Add all other fields (keeping all data fields intact)
+			newFields = append(newFields, field)
+		}
+
+		// Replace the fields with the cleaned version
+		def.Fields = newFields
 	}
 }

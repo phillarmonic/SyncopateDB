@@ -145,13 +145,15 @@ func (s *Server) handleListEntities(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Filter internal fields from response data and convert IDs
+	// Filter internal fields from response data, ensure all fields are included, and convert IDs
 	filteredData := make([]interface{}, len(response.Data))
 	for i, entity := range response.Data {
 		// Filter internal fields first
 		filteredEntity := s.filterInternalFields(entity)
+		// Ensure all fields from definition are included
+		completeEntity := s.includeAllDefinedFields(filteredEntity, def)
 		// Then convert to representation with proper ID type
-		filteredData[i] = common.ConvertToRepresentation(filteredEntity, def.IDGenerator)
+		filteredData[i] = common.ConvertToRepresentation(completeEntity, def.IDGenerator)
 	}
 
 	// Create a new response with the filtered and converted data
@@ -212,6 +214,11 @@ func (s *Server) handleCreateEntity(w http.ResponseWriter, r *http.Request) {
 
 	// Insert the entity - ID will be generated if not provided
 	if err := s.engine.Insert(entityType, rawID, entityData.Fields); err != nil {
+		// Check if this is a unique constraint violation
+		if strings.Contains(err.Error(), "unique constraint violation") {
+			s.respondWithError(w, http.StatusConflict, err.Error())
+			return
+		}
 		s.respondWithError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -344,6 +351,11 @@ func (s *Server) handleUpdateEntity(w http.ResponseWriter, r *http.Request) {
 
 	// Use the new type-safe Update method
 	if err := s.engine.Update(entityType, normalizedID, updateData.Fields); err != nil {
+		// Check if this is a unique constraint violation
+		if strings.Contains(err.Error(), "unique constraint violation") {
+			s.respondWithError(w, http.StatusConflict, err.Error())
+			return
+		}
 		s.respondWithError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -490,7 +502,7 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Filter internal fields from response data and convert IDs
+	// Filter internal fields from response data, ensure all fields are included, and convert IDs
 	filteredData := make([]interface{}, len(response.Data))
 	for i, entity := range response.Data {
 		// Create a filtered copy of the entity
@@ -507,8 +519,11 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		// Ensure all fields from definition are included
+		completeEntity := s.includeAllDefinedFields(filteredEntity, def)
+
 		// Then convert to representation with proper ID type
-		filteredData[i] = common.ConvertToRepresentation(filteredEntity, def.IDGenerator)
+		filteredData[i] = common.ConvertToRepresentation(completeEntity, def.IDGenerator)
 	}
 
 	// Create a new response with the filtered and converted data
@@ -600,11 +615,14 @@ func (s *Server) filterInternalFieldsWithIDConversion(entity common.Entity) inte
 		return s.filterInternalFields(entity)
 	}
 
-	// Filter out internal fields
+	// First, filter out internal fields
 	filteredEntity := s.filterInternalFields(entity)
 
+	// Then, ensure all fields from definition are included
+	completeEntity := s.includeAllDefinedFields(filteredEntity, def)
+
 	// Convert to representation with proper ID type
-	return common.ConvertToRepresentation(filteredEntity, def.IDGenerator)
+	return common.ConvertToRepresentation(completeEntity, def.IDGenerator)
 }
 
 // determineEnvironment tries to detect the current deployment environment

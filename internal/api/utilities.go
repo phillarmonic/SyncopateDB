@@ -75,3 +75,41 @@ func formatCompressionRatio(ratio float64) string {
 	reductionPercent := (1.0 - (1.0 / ratio)) * 100
 	return fmt.Sprintf("%.1f%% smaller (%.1fx)", reductionPercent, ratio)
 }
+
+// includeAllDefinedFields adds all fields from the entity definition
+// to the entity response, setting undefined fields to null
+func (s *Server) includeAllDefinedFields(entity common.Entity, def common.EntityDefinition) common.Entity {
+	// Create a copy of the entity to avoid modifying the original
+	result := common.Entity{
+		ID:     entity.ID,
+		Type:   entity.Type,
+		Fields: make(map[string]interface{}),
+	}
+
+	// Copy existing fields
+	for key, value := range entity.Fields {
+		result.Fields[key] = value
+	}
+
+	// Add all fields from definition that aren't already present
+	// and aren't internal
+	for _, fieldDef := range def.Fields {
+		// Skip internal fields
+		if fieldDef.Internal || strings.HasPrefix(fieldDef.Name, "_") {
+			continue
+		}
+
+		// IMPORTANT: Skip fields named "id" to avoid duplicating the entity ID
+		// which is already exposed at the top level and to prevent update issues
+		if fieldDef.Name == "id" {
+			continue
+		}
+
+		// If field is not in the entity, add it with null value
+		if _, exists := result.Fields[fieldDef.Name]; !exists {
+			result.Fields[fieldDef.Name] = nil
+		}
+	}
+
+	return result
+}

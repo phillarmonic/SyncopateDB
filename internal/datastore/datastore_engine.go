@@ -773,25 +773,42 @@ func (dse *Engine) addInternalFields(entityType string, data map[string]interfac
 
 // addInternalFieldDefinitions adds internal field definitions to an entity type
 func (dse *Engine) addInternalFieldDefinitions(def *common.EntityDefinition) {
-	// Add _created_at field
-	createdAtField := common.FieldDefinition{
-		Name:     "_created_at",
-		Type:     "datetime",
-		Indexed:  true, // Index for efficient sorting
-		Required: true,
-		Internal: true, // Mark as internal
+	// Check if internal fields already exist
+	createdAtExists := false
+	updatedAtExists := false
+
+	for _, field := range def.Fields {
+		if field.Name == "_created_at" {
+			createdAtExists = true
+		}
+		if field.Name == "_updated_at" {
+			updatedAtExists = true
+		}
 	}
 
-	// Add _updated_at field
-	updatedAtField := common.FieldDefinition{
-		Name:     "_updated_at",
-		Type:     "datetime",
-		Indexed:  true, // Index for efficient filtering
-		Required: true,
-		Internal: true, // Mark as internal
+	// Add _created_at field if it doesn't exist
+	if !createdAtExists {
+		createdAtField := common.FieldDefinition{
+			Name:     "_created_at",
+			Type:     "datetime",
+			Indexed:  true, // Index for efficient sorting
+			Required: true,
+			Internal: true, // Mark as internal
+		}
+		def.Fields = append(def.Fields, createdAtField)
 	}
 
-	def.Fields = append(def.Fields, createdAtField, updatedAtField)
+	// Add _updated_at field if it doesn't exist
+	if !updatedAtExists {
+		updatedAtField := common.FieldDefinition{
+			Name:     "_updated_at",
+			Type:     "datetime",
+			Indexed:  true, // Index for efficient filtering
+			Required: true,
+			Internal: true, // Mark as internal
+		}
+		def.Fields = append(def.Fields, updatedAtField)
+	}
 }
 
 // DebugInspectEntities provides direct access to the entities map for debugging purposes

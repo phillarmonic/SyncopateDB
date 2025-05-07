@@ -56,8 +56,11 @@ func (s *Server) handleNestedQuery(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		// Ensure all fields from definition are included
+		completeEntity := s.includeAllDefinedFields(filteredEntity, def)
+
 		// Then convert to proper representation with correct ID type
-		filteredData[i] = common.ConvertToRepresentation(filteredEntity, def.IDGenerator)
+		filteredData[i] = common.ConvertToRepresentation(completeEntity, def.IDGenerator)
 	}
 
 	// Create the final response
