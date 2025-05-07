@@ -57,6 +57,11 @@ func (dse *Engine) validateEntityData(entityType string, data map[string]interfa
 		}
 	}
 
+	// Validate uniqueness constraints (pass empty string for entityID as this is a new entity)
+	if err := dse.validateUniqueness(entityType, data, ""); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -135,7 +140,7 @@ func validateFieldType(fieldType string, value interface{}) error {
 }
 
 // On update of entity data, validate the data against the defined schema.
-func (dse *Engine) validateUpdateData(entityType string, data map[string]interface{}) error {
+func (dse *Engine) validateUpdateData(entityType string, entityID string, data map[string]interface{}) error {
 	def, exists := dse.definitions[entityType]
 	if !exists {
 		return fmt.Errorf("entity type '%s' not registered", entityType)
@@ -185,6 +190,12 @@ func (dse *Engine) validateUpdateData(entityType string, data map[string]interfa
 		if err := validateFieldType(fieldDef.Type, value); err != nil {
 			return fmt.Errorf("field '%s': %w", fieldName, err)
 		}
+	}
+
+	// Check uniqueness for updates
+	// For updates, we need to check uniqueness but exclude the entity being updated
+	if err := dse.validateUniqueness(entityType, data, entityID); err != nil {
+		return err
 	}
 
 	return nil

@@ -21,6 +21,29 @@ func (dse *Engine) UpdateEntityType(updatedDef common.EntityDefinition) error {
 		return err
 	}
 
+	// Check for changes in unique constraints
+	oldUniqueFields := make(map[string]bool)
+	for _, field := range originalDef.Fields {
+		if field.Unique {
+			oldUniqueFields[field.Name] = true
+		}
+	}
+
+	newUniqueFields := make(map[string]bool)
+	for _, field := range updatedDef.Fields {
+		if field.Unique {
+			newUniqueFields[field.Name] = true
+
+			// Can't make field unique if it wasn't before (might contain duplicates)
+			if !oldUniqueFields[field.Name] {
+				// Need to verify that we don't have duplicate values in the database
+				if err := dse.verifyUniqueConstraintCanBeAdded(updatedDef.Name, field.Name); err != nil {
+					return err
+				}
+			}
+		}
+	}
+
 	// Perform schema compatibility checks
 	migrationPlan, err := dse.createMigrationPlan(originalDef, updatedDef)
 	if err != nil {
@@ -47,6 +70,36 @@ func (dse *Engine) UpdateEntityType(updatedDef common.EntityDefinition) error {
 
 	// Update indices for new indexed fields
 	dse.updateIndicesForSchemaChange(originalDef, updatedDef)
+
+	// Initialize or update unique indices
+	for _, field := range updatedDef.Fields {
+		if field.Unique {
+			// If this field is newly marked as unique, initialize its unique index
+			if !oldUniqueFields[field.Name] {
+				if dse.uniqueIndices[updatedDef.Name] == nil {
+					dse.uniqueIndices[updatedDef.Name] = make(map[string]map[string]string)
+				}
+				dse.uniqueIndices[updatedDef.Name][field.Name] = make(map[string]string)
+
+				// Populate the unique index with existing data
+				for _, entity := range dse.entities {
+					if entity.Type == updatedDef.Name {
+						if value, exists := entity.Fields[field.Name]; exists && value != nil {
+							indexValue := uniqueIndexKey(value)
+							dse.uniqueIndices[updatedDef.Name][field.Name][indexValue] = entity.ID
+						}
+					}
+				}
+			}
+		} else {
+			// If this field is no longer unique, remove its unique index
+			if oldUniqueFields[field.Name] {
+				if dse.uniqueIndices[updatedDef.Name] != nil {
+					delete(dse.uniqueIndices[updatedDef.Name], field.Name)
+				}
+			}
+		}
+	}
 
 	// Store reference to persistence provider and release lock
 	persistenceProvider := dse.persistence
@@ -317,4 +370,42 @@ func convertFieldValue(value interface{}, oldType, newType string) (interface{},
 		}
 		return value, nil
 	}
+}
+
+// verifyUniqueConstraintCanBeAdded checks if adding a unique constraint to a field is possible
+// based on existing data
+func (dse *Engine) verifyUniqueConstraintCanBeAdded(entityType string, fieldName string) error {
+	dse.mu.RLock()
+	defer dse.mu.RUnlock()
+
+	// Map to track seen values
+	seenValues := make(map[string]string) // value -> entityID
+
+	// Check all entities of this type
+	for _, entity := range dse.entities {
+		if entity.Type != entityType {
+			continue
+		}
+
+		// Check if this entity has the field
+		value, exists := entity.Fields[fieldName]
+		if !exists || value == nil {
+			continue
+		}
+
+		// Convert value to string for comparison
+		strValue := uniqueIndexKey(value)
+
+		// Check if we've seen this value before
+		if existingID, found := seenValues[strValue]; found {
+			return fmt.Errorf("cannot add unique constraint to field '%s': duplicate value '%v' found in entities with IDs '%s' and '%s'",
+				fieldName, value, existingID, entity.ID)
+		}
+
+		// Record this value
+		seenValues[strValue] = entity.ID
+	}
+
+	// No duplicates found, constraint can be added
+	return nil
 }

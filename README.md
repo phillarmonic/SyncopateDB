@@ -179,9 +179,46 @@ SyncopateDB supports advanced querying with filtering, sorting, and pagination.
 
 ### Creating Entity Types
 
+#### Field Definition Options
+
+When defining entity types in SyncopateDB, fields can have the following properties:
+
+- **name**: Field name (required)
+- **type**: Data type (string, text, integer, float, boolean, datetime, json)
+- **required**: Whether the field must be present (true/false)
+- **nullable**: Whether the field can have null values (true/false)
+- **indexed**: Whether to create an index for this field (true/false)
+- **unique**: Whether values must be unique within the entity type (true/false)
+
+#### Unique Constraints
+
+SyncopateDB supports unique constraints on entity fields. A unique constraint ensures that no two entities of the same type can have the same value for a particular field, similar to unique indexes in traditional databases.
+
+#### Key aspects of unique constraints:
+
+1. **Uniqueness Enforcement**:
+   - During entity creation and updates, SyncopateDB validates that the value doesn't exist in any other entity
+   - If a duplicate is found, the operation fails with a detailed error message
+2. **Schema Definition**:
+   - Fields can be marked as unique in the entity type definition
+   - Unique fields are automatically indexed for performance optimization
+3. **Schema Evolution**:
+   - Unique constraints can be added to existing entity types
+   - The system validates existing data to ensure no duplicates exist before applying the constraint
+   - Existing entities are automatically indexed for the unique field
+4. **Performance**:
+   - Special indexing structures optimize uniqueness checks
+   - Built-in validation handles concurrent operations safely
+5. **Limitations**:
+   - Uniqueness is enforced per-field, not across combinations of fields
+   - String comparisons are case-sensitive
+   - Multiple entities can have `null` for a unique field (uniqueness applies only to non-null values)
+
+
+
 Pro tip: If you want to use auto_increment, you can omit it from the payload and it'll be automatically selected.
 
-Create a "Product" entity type with auto-increment IDs:
+**Create a "Product" entity type with auto-increment IDs:**
 
 ```bash
 curl -X POST http://localhost:8080/api/v1/entity-types \
