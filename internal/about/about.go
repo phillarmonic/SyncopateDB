@@ -14,7 +14,7 @@ func About() Datum {
 	return Datum{
 		Name:        "SyncopateDB",
 		Description: "A flexible, lightweight data store with advanced query capabilities",
-		Version:     "0.5.0",
+		Version:     "0.5.1",
 		License:     "MIT",
 		Contributors: []string{
 			"The Phillarmonic Software Team <the PhillarMonkeys>",
