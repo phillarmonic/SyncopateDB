@@ -3,6 +3,7 @@ package datastore
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/phillarmonic/syncopate-db/internal/utilities"
 	"sort"
 	"strings"
 	"sync"
@@ -934,7 +935,7 @@ func (dse *Engine) validateUniqueness(entityType string, data map[string]interfa
 				// If the existing ID is not the entity being updated, it's a conflict
 				if existingID != entityID {
 					return fmt.Errorf("unique constraint violation: field '%s' with value '%v' already exists in entity ID '%s'",
-						fieldName, value, existingID)
+						fieldName, utilities.FormatValueForDisplay(value), existingID)
 				}
 			}
 		}
