@@ -666,6 +666,21 @@ func (s *Server) handleUpdateEntityType(w http.ResponseWriter, r *http.Request) 
 		updatedDef.IDGenerator = originalDef.IDGenerator
 	}
 
+	// Check for uniqueness constraint changes
+	oldUniqueFields := make(map[string]bool)
+	for _, field := range originalDef.Fields {
+		if field.Unique {
+			oldUniqueFields[field.Name] = true
+		}
+	}
+
+	newUniqueFields := make(map[string]bool)
+	for _, field := range updatedDef.Fields {
+		if field.Unique {
+			newUniqueFields[field.Name] = true
+		}
+	}
+
 	// Update the entity type
 	if err := s.engine.UpdateEntityType(updatedDef); err != nil {
 		s.respondWithError(w, http.StatusBadRequest, err.Error())
@@ -681,10 +696,36 @@ func (s *Server) handleUpdateEntityType(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Provide a detailed response with information about the update
-	s.respondWithJSON(w, http.StatusOK, map[string]interface{}{
+	response := map[string]interface{}{
 		"message":    "Entity type updated successfully",
 		"entityType": updatedDef,
-	})
+	}
+
+	// If unique constraints were added, mention it in the response
+	addedUniqueFields := make([]string, 0)
+	for field := range newUniqueFields {
+		if !oldUniqueFields[field] {
+			addedUniqueFields = append(addedUniqueFields, field)
+		}
+	}
+
+	if len(addedUniqueFields) > 0 {
+		response["uniqueConstraintsAdded"] = addedUniqueFields
+	}
+
+	// If unique constraints were removed, mention it in the response
+	removedUniqueFields := make([]string, 0)
+	for field := range oldUniqueFields {
+		if !newUniqueFields[field] {
+			removedUniqueFields = append(removedUniqueFields, field)
+		}
+	}
+
+	if len(removedUniqueFields) > 0 {
+		response["uniqueConstraintsRemoved"] = removedUniqueFields
+	}
+
+	s.respondWithJSON(w, http.StatusOK, response)
 }
 
 func (s *Server) handleDebugSchema(w http.ResponseWriter, r *http.Request) {
@@ -726,6 +767,7 @@ func (s *Server) handleDebugSchema(w http.ResponseWriter, r *http.Request) {
 			"required": field.Required,
 			"nullable": field.Nullable,
 			"internal": field.Internal,
+			"unique":   field.Unique,
 		}
 	}
 

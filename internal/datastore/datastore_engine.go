@@ -17,6 +17,7 @@ type Engine struct {
 	definitions    map[string]common.EntityDefinition
 	entities       map[string]common.Entity // Key format: "entityType:entityID"
 	indices        map[string]map[string]map[string][]string
+	uniqueIndices  map[string]map[string]map[string]string
 	persistence    common.PersistenceProvider
 	idGeneratorMgr *IDGeneratorManager
 	mu             sync.RWMutex
@@ -48,6 +49,7 @@ func NewDataStoreEngine(config ...EngineConfig) *Engine {
 		definitions:    make(map[string]common.EntityDefinition),
 		entities:       make(map[string]common.Entity),
 		indices:        make(map[string]map[string]map[string][]string),
+		uniqueIndices:  make(map[string]map[string]map[string]string),
 		idGeneratorMgr: NewIDGeneratorManager(),
 	}
 
@@ -161,10 +163,24 @@ func (dse *Engine) RegisterEntityType(def common.EntityDefinition) error {
 	dse.definitions[def.Name] = def
 	dse.indices[def.Name] = make(map[string]map[string][]string)
 
-	// Initialize indices for indexed fields
+	// Initialize unique indices for unique fields
+	dse.uniqueIndices[def.Name] = make(map[string]map[string]string)
+
+	// Initialize indices for indexed fields and unique indices for unique fields
 	for _, field := range def.Fields {
 		if field.Indexed {
 			dse.indices[def.Name][field.Name] = make(map[string][]string)
+		}
+
+		if field.Unique {
+			// Unique fields should also be indexed for performance
+			if !field.Indexed {
+				field.Indexed = true
+				dse.indices[def.Name][field.Name] = make(map[string][]string)
+			}
+
+			// Initialize the unique index map
+			dse.uniqueIndices[def.Name][field.Name] = make(map[string]string)
 		}
 	}
 
@@ -181,6 +197,7 @@ func (dse *Engine) RegisterEntityType(def common.EntityDefinition) error {
 			dse.mu.Lock()
 			delete(dse.definitions, def.Name)
 			delete(dse.indices, def.Name)
+			delete(dse.uniqueIndices, def.Name)
 			dse.mu.Unlock()
 
 			return fmt.Errorf("failed to persist entity type: %w", persistErr)
@@ -308,6 +325,12 @@ func (dse *Engine) Insert(entityType string, id string, data map[string]interfac
 		return fmt.Errorf("entity with ID %s already exists for entity type %s", id, entityType)
 	}
 
+	// Check uniqueness constraints AFTER acquiring write lock
+	if err := dse.validateUniqueness(entityType, data, ""); err != nil {
+		dse.mu.Unlock()
+		return err
+	}
+
 	// Store the entity and update indices
 	dse.entities[entityKey] = entity
 	dse.updateIndices(entity, true)
@@ -383,7 +406,7 @@ func (dse *Engine) Update(entityType string, id string, data map[string]interfac
 	delete(data, "_created_at")
 
 	// Validate the update data against the correct entity type
-	if err := dse.validateUpdateData(entityType, data); err != nil {
+	if err := dse.validateUpdateData(entityType, id, data); err != nil {
 		dse.mu.RUnlock()
 		return err
 	}
@@ -409,6 +432,21 @@ func (dse *Engine) Update(entityType string, id string, data map[string]interfac
 	if !exists {
 		dse.mu.Unlock()
 		return fmt.Errorf("entity with ID %s and type %s not found", id, entityType)
+	}
+
+	// Check uniqueness constraints AFTER acquiring write lock
+	// First, create a merged map of current fields + update fields to check the final state
+	mergedFields := make(map[string]interface{})
+	for k, v := range entity.Fields {
+		mergedFields[k] = v
+	}
+	for k, v := range data {
+		mergedFields[k] = v
+	}
+
+	if err := dse.validateUniqueness(entityType, mergedFields, id); err != nil {
+		dse.mu.Unlock()
+		return err
 	}
 
 	// Remove old index entries
@@ -654,6 +692,7 @@ func (dse *Engine) GetAllEntitiesOfType(entityType string) ([]common.Entity, err
 
 // updateIndices adds or removes index entries for an entity
 func (dse *Engine) updateIndices(entity common.Entity, add bool) {
+	// Original index update logic
 	def := dse.definitions[entity.Type]
 	for _, fieldDef := range def.Fields {
 		if fieldDef.Indexed {
@@ -684,6 +723,9 @@ func (dse *Engine) updateIndices(entity common.Entity, add bool) {
 			}
 		}
 	}
+
+	// Also update unique indices
+	dse.updateUniqueIndices(entity, add)
 }
 
 // getIndexableValue converts a value to a string for indexing
@@ -852,4 +894,112 @@ func (dse *Engine) MigrateToCompositeKeys() {
 
 	// Replace the old map with the migrated one
 	dse.entities = migratedEntities
+}
+
+// Add this function to validate uniqueness constraints
+func (dse *Engine) validateUniqueness(entityType string, data map[string]interface{}, entityID string) error {
+	def, exists := dse.definitions[entityType]
+	if !exists {
+		return fmt.Errorf("entity type %s not registered", entityType)
+	}
+
+	// Create a map to track which fields need uniqueness validation
+	uniqueFields := make(map[string]bool)
+	for _, fieldDef := range def.Fields {
+		if fieldDef.Unique {
+			uniqueFields[fieldDef.Name] = true
+		}
+	}
+
+	// If no unique fields, return early
+	if len(uniqueFields) == 0 {
+		return nil
+	}
+
+	// For each unique field in the incoming data, check using the unique index
+	for fieldName := range uniqueFields {
+		value, exists := data[fieldName]
+		if !exists || value == nil {
+			// Skip fields that don't exist in the data or are null
+			continue
+		}
+
+		// Get string representation of the value
+		indexValue := uniqueIndexKey(value)
+
+		// Check if this value exists in the unique index
+		if dse.uniqueIndices[entityType] != nil &&
+			dse.uniqueIndices[entityType][fieldName] != nil {
+			if existingID, exists := dse.uniqueIndices[entityType][fieldName][indexValue]; exists {
+				// If the existing ID is not the entity being updated, it's a conflict
+				if existingID != entityID {
+					return fmt.Errorf("unique constraint violation: field '%s' with value '%v' already exists in entity ID '%s'",
+						fieldName, value, existingID)
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+func uniqueIndexKey(value interface{}) string {
+	switch v := value.(type) {
+	case string:
+		return v
+	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+		return fmt.Sprintf("%d", v)
+	case float32, float64:
+		return fmt.Sprintf("%g", v)
+	case bool:
+		return fmt.Sprintf("%t", v)
+	case time.Time:
+		return v.Format(time.RFC3339)
+	default:
+		// For complex types, use JSON serialization
+		bytes, err := json.Marshal(v)
+		if err != nil {
+			return fmt.Sprintf("%v", v)
+		}
+		return string(bytes)
+	}
+}
+
+// updateUniqueIndices updates the unique indices for an entity
+func (dse *Engine) updateUniqueIndices(entity common.Entity, add bool) {
+	// Get entity definition
+	def := dse.definitions[entity.Type]
+
+	// Iterate through fields marked as unique
+	for _, fieldDef := range def.Fields {
+		if fieldDef.Unique {
+			// Get the field value
+			value, exists := entity.Fields[fieldDef.Name]
+			if !exists || value == nil {
+				continue // Skip nil or non-existent values
+			}
+
+			// Get string representation of the value
+			indexValue := uniqueIndexKey(value)
+
+			// Initialize the unique index map for this entity type and field if needed
+			if add {
+				if dse.uniqueIndices[entity.Type] == nil {
+					dse.uniqueIndices[entity.Type] = make(map[string]map[string]string)
+				}
+				if dse.uniqueIndices[entity.Type][fieldDef.Name] == nil {
+					dse.uniqueIndices[entity.Type][fieldDef.Name] = make(map[string]string)
+				}
+
+				// Add to unique index (value -> entity ID)
+				dse.uniqueIndices[entity.Type][fieldDef.Name][indexValue] = entity.ID
+			} else {
+				// Remove from unique index
+				if dse.uniqueIndices[entity.Type] != nil &&
+					dse.uniqueIndices[entity.Type][fieldDef.Name] != nil {
+					delete(dse.uniqueIndices[entity.Type][fieldDef.Name], indexValue)
+				}
+			}
+		}
+	}
 }
