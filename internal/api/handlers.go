@@ -394,7 +394,6 @@ func (s *Server) handleDeleteEntity(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Special handling for auto-increment IDs
-	var entityID string = rawID
 	if def.IDGenerator == common.IDTypeAutoIncrement {
 		// IMPORTANT: For auto-increment, we need to make sure we're using
 		// exactly the same string format as when it was stored
@@ -420,7 +419,7 @@ func (s *Server) handleDeleteEntity(w http.ResponseWriter, r *http.Request) {
 			// Try to get the entity with this format
 			if _, err := s.engine.Get(format); err == nil {
 				// Found it! Use this format for deletion
-				entityID = format
+				rawID = format
 				entityFound = true
 				break
 			}
@@ -434,7 +433,6 @@ func (s *Server) handleDeleteEntity(w http.ResponseWriter, r *http.Request) {
 					// Look for an entity with matching ID and type
 					for _, entity := range entities {
 						if entity.Type == entityType && entity.ID == rawID {
-							entityID = rawID
 							entityFound = true
 							break
 						}
@@ -458,7 +456,7 @@ func (s *Server) handleDeleteEntity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// At this point, we should have the right entityID format
+	// At this point, we should have the right format
 	if s.config.DebugMode {
 		s.logger.WithFields(logrus.Fields{
 			"entityType":   entityType,   // This is from the URL, e.g., "posts"
