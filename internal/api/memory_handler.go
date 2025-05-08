@@ -1,8 +1,8 @@
-// This file should be located in: internal/api/memory_handler.go
 package api
 
 import (
 	"fmt"
+	"github.com/phillarmonic/syncopate-db/internal/errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -473,7 +473,8 @@ func (s *Server) handleMemoryConfig(w http.ResponseWriter, r *http.Request) {
 
 	// Must be POST for configuration changes
 	if r.Method != http.MethodPost {
-		s.respondWithError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		s.respondWithError(w, http.StatusMethodNotAllowed, "Method not allowed",
+			errors.NewError(errors.ErrCodeInvalidRequest, "Only GET and POST methods are allowed for this endpoint"))
 		return
 	}
 
@@ -482,7 +483,9 @@ func (s *Server) handleMemoryConfig(w http.ResponseWriter, r *http.Request) {
 	if intervalStr != "" {
 		interval, err := strconv.Atoi(intervalStr)
 		if err != nil || interval < 1 {
-			s.respondWithError(w, http.StatusBadRequest, "Invalid interval value")
+			s.respondWithError(w, http.StatusBadRequest, "Invalid interval value",
+				errors.NewError(errors.ErrCodeInvalidRequest,
+					fmt.Sprintf("Invalid interval value: %s. Must be a positive integer.", intervalStr)))
 			return
 		}
 
@@ -494,7 +497,9 @@ func (s *Server) handleMemoryConfig(w http.ResponseWriter, r *http.Request) {
 	if historyStr != "" {
 		historyLen, err := strconv.Atoi(historyStr)
 		if err != nil || historyLen < 1 {
-			s.respondWithError(w, http.StatusBadRequest, "Invalid history length")
+			s.respondWithError(w, http.StatusBadRequest, "Invalid history length",
+				errors.NewError(errors.ErrCodeInvalidRequest,
+					fmt.Sprintf("Invalid history length: %s. Must be a positive integer.", historyStr)))
 			return
 		}
 

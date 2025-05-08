@@ -3,6 +3,7 @@ package datastore
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/phillarmonic/syncopate-db/internal/errors"
 	"github.com/phillarmonic/syncopate-db/internal/utilities"
 	"sort"
 	"strings"
@@ -131,7 +132,7 @@ func (dse *Engine) RegisterEntityType(def common.EntityDefinition) error {
 	dse.mu.RUnlock()
 
 	if exists {
-		return fmt.Errorf("entity type %s already exists", def.Name)
+		return entityTypeExistsError(def.Name)
 	}
 
 	// Validate that no field names start with underscore (reserved for internal use)
@@ -154,7 +155,7 @@ func (dse *Engine) RegisterEntityType(def common.EntityDefinition) error {
 	// Double-check existence after acquiring write lock
 	if _, exists := dse.definitions[def.Name]; exists {
 		dse.mu.Unlock()
-		return fmt.Errorf("entity type %s already exists", def.Name)
+		return entityTypeExistsError(def.Name)
 	}
 
 	// Register the ID generator type for this entity
@@ -201,7 +202,7 @@ func (dse *Engine) RegisterEntityType(def common.EntityDefinition) error {
 			delete(dse.uniqueIndices, def.Name)
 			dse.mu.Unlock()
 
-			return fmt.Errorf("failed to persist entity type: %w", persistErr)
+			return persistenceFailedError(persistErr)
 		}
 	}
 
@@ -215,7 +216,7 @@ func (dse *Engine) GetEntityDefinition(entityType string) (common.EntityDefiniti
 
 	def, exists := dse.definitions[entityType]
 	if !exists {
-		return common.EntityDefinition{}, fmt.Errorf("entity type %s not registered", entityType)
+		return common.EntityDefinition{}, entityTypeNotFoundError(entityType)
 	}
 
 	return def, nil
@@ -239,7 +240,7 @@ func (dse *Engine) ListEntityTypes() []string {
 func (dse *Engine) prepareEntityForInsert(entityType string, id string, data map[string]interface{}) (common.Entity, error) {
 	// Check if entity type is registered
 	if _, exists := dse.definitions[entityType]; !exists {
-		return common.Entity{}, fmt.Errorf("entity type %s not registered", entityType)
+		return common.Entity{}, entityTypeNotFoundError(entityType)
 	}
 
 	// Validate data against entity definition
@@ -250,7 +251,7 @@ func (dse *Engine) prepareEntityForInsert(entityType string, id string, data map
 	// Check if ID already exists using the composite key
 	entityKey := createEntityKey(entityType, id)
 	if _, exists := dse.entities[entityKey]; exists {
-		return common.Entity{}, fmt.Errorf("entity with ID %s already exists for entity type %s", id, entityType)
+		return common.Entity{}, entityAlreadyExistsError(entityType, id)
 	}
 
 	// Create the entity
@@ -269,7 +270,7 @@ func (dse *Engine) Insert(entityType string, id string, data map[string]interfac
 	dse.mu.RUnlock()
 
 	if !exists {
-		return fmt.Errorf("entity type %s not registered", entityType)
+		return entityTypeNotFoundError(entityType)
 	}
 
 	// Handle ID generation if needed
@@ -279,17 +280,18 @@ func (dse *Engine) Insert(entityType string, id string, data map[string]interfac
 		var err error
 		id, err = dse.idGeneratorMgr.GenerateID(entityType)
 		if err != nil {
-			return fmt.Errorf("failed to generate ID: %w", err)
+			return idGenerationFailedError(err)
 		}
 		generatedID = true
 	} else {
 		// Validate provided ID against expected format
 		valid, err := dse.idGeneratorMgr.ValidateID(entityType, id)
 		if err != nil {
-			return fmt.Errorf("failed to validate ID: %w", err)
+			return errors.WrapError(err, errors.ErrCodeInvalidID,
+				fmt.Sprintf("failed to validate ID for entity type '%s'", entityType))
 		}
 		if !valid {
-			return fmt.Errorf("invalid ID format for entity type %s", entityType)
+			return invalidIDError(entityType, id)
 		}
 	}
 
@@ -302,7 +304,7 @@ func (dse *Engine) Insert(entityType string, id string, data map[string]interfac
 	dse.mu.RUnlock()
 
 	if err != nil {
-		return err
+		return err // Already wrapped with proper error codes in validation
 	}
 
 	// Create composite key
@@ -314,22 +316,25 @@ func (dse *Engine) Insert(entityType string, id string, data map[string]interfac
 	// Check again if entity type exists and ID is unique under write lock
 	if _, exists := dse.definitions[entityType]; !exists {
 		dse.mu.Unlock()
-		return fmt.Errorf("entity type %s not registered", entityType)
+		return entityTypeNotFoundError(entityType)
 	}
 
 	if _, exists := dse.entities[entityKey]; exists {
 		dse.mu.Unlock()
 		if generatedID {
 			// If we generated the ID and there's still a collision, something is wrong with our ID generator
-			return fmt.Errorf("generated ID %s already exists for entity type %s, this should not happen", id, entityType)
+			return errors.NewError(
+				errors.ErrCodeIDGenerationFailed,
+				fmt.Sprintf("generated ID %s already exists for entity type %s, this should not happen", id, entityType),
+			)
 		}
-		return fmt.Errorf("entity with ID %s already exists for entity type %s", id, entityType)
+		return entityAlreadyExistsError(entityType, id)
 	}
 
 	// Check uniqueness constraints AFTER acquiring write lock
 	if err := dse.validateUniqueness(entityType, data, ""); err != nil {
 		dse.mu.Unlock()
-		return err
+		return err // Already wrapped with proper error codes
 	}
 
 	// Store the entity and update indices
@@ -352,13 +357,13 @@ func (dse *Engine) Insert(entityType string, id string, data map[string]interfac
 			delete(dse.entities, entityKey)
 			dse.mu.Unlock()
 
-			return fmt.Errorf("failed to persist entity: %w", err)
+			return persistenceFailedError(err)
 		}
 
 		// Save auto-increment counter if this is an auto-increment entity type
 		if persistenceWithCounters, ok := persistenceProvider.(common.PersistenceWithCounters); ok {
-			def, _ := dse.GetEntityDefinition(entityType)
-			if def.IDGenerator == common.IDTypeAutoIncrement {
+			def, err := dse.GetEntityDefinition(entityType)
+			if err == nil && def.IDGenerator == common.IDTypeAutoIncrement {
 				counter, err := dse.GetAutoIncrementCounter(entityType)
 				if err == nil {
 					if err := persistenceWithCounters.SaveCounter(entityType, counter); err != nil {

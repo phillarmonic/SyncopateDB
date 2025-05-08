@@ -2,15 +2,16 @@ package api
 
 import (
 	"bytes"
+	"fmt"
 	"github.com/klauspost/compress/zstd"
+	"github.com/phillarmonic/syncopate-db/internal/errors"
 	"github.com/phillarmonic/syncopate-db/internal/settings"
+	"github.com/sirupsen/logrus"
 	"io"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/sirupsen/logrus"
 )
 
 // RateLimiter provides thread-safe rate limiting functionality
@@ -118,7 +119,20 @@ func (s *Server) recoveryMiddleware(next http.Handler) http.Handler {
 					"error": err,
 					"path":  r.URL.Path,
 				}).Error("Recovered from panic")
-				s.respondWithError(w, http.StatusInternalServerError, "Internal server error")
+
+				// Convert panic to error
+				var errMsg string
+				switch e := err.(type) {
+				case error:
+					errMsg = e.Error()
+				case string:
+					errMsg = e
+				default:
+					errMsg = fmt.Sprintf("%v", e)
+				}
+
+				s.respondWithError(w, http.StatusInternalServerError, "Internal server error",
+					errors.NewError(errors.ErrCodeInternalServer, errMsg))
 			}
 		}()
 		next.ServeHTTP(w, r)
@@ -127,14 +141,15 @@ func (s *Server) recoveryMiddleware(next http.Handler) http.Handler {
 
 // rateLimitMiddleware implements rate limiting with proper synchronization
 func (s *Server) rateLimitMiddleware(next http.Handler) http.Handler {
-	limiter := NewRateLimiter(1500, time.Second) // 1000 requests per second per IP
+	limiter := NewRateLimiter(1500, time.Second) // 1500 requests per second per IP
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ip := r.RemoteAddr
 
 		// Check if the request exceeds the rate limit
 		if limiter.Check(ip) {
-			s.respondWithError(w, http.StatusTooManyRequests, "Rate limit exceeded")
+			s.respondWithError(w, http.StatusTooManyRequests, "Rate limit exceeded",
+				errors.NewError(errors.ErrCodeTooManyRequests, "Rate limit exceeded, try again later"))
 			return
 		}
 

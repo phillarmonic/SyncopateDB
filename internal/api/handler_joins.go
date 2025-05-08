@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"github.com/phillarmonic/syncopate-db/internal/common"
 	"github.com/phillarmonic/syncopate-db/internal/datastore"
+	"github.com/phillarmonic/syncopate-db/internal/errors"
 	"net/http"
 	"strings"
 )
@@ -12,28 +13,32 @@ import (
 func (s *Server) handleNestedQuery(w http.ResponseWriter, r *http.Request) {
 	var queryOpts datastore.QueryOptions
 	if err := json.NewDecoder(r.Body).Decode(&queryOpts); err != nil {
-		s.respondWithError(w, http.StatusBadRequest, "Invalid request payload")
+		s.respondWithError(w, http.StatusBadRequest, "Invalid request payload",
+			errors.NewError(errors.ErrCodeMalformedData, "Failed to decode query options"))
 		return
 	}
 	defer r.Body.Close()
 
 	// Validate that we have at least one join
 	if len(queryOpts.Joins) == 0 {
-		s.respondWithError(w, http.StatusBadRequest, "No joins specified for nested query")
+		s.respondWithError(w, http.StatusBadRequest, "No joins specified for nested query",
+			errors.NewError(errors.ErrCodeInvalidJoin, "No joins specified for nested query"))
 		return
 	}
 
 	// Use the new function that properly handles joins without modifying original entities
 	response, err := s.queryService.ExecuteQueryWithJoins(queryOpts)
 	if err != nil {
-		s.respondWithError(w, http.StatusBadRequest, err.Error())
+		s.respondWithError(w, http.StatusBadRequest, err.Error(),
+			datastore.ConvertToSyncopateError(err))
 		return
 	}
 
 	// Get the entity definition to determine ID type for the main entities
 	def, err := s.engine.GetEntityDefinition(queryOpts.EntityType)
 	if err != nil {
-		s.respondWithError(w, http.StatusBadRequest, err.Error())
+		s.respondWithError(w, http.StatusBadRequest, err.Error(),
+			datastore.ConvertToSyncopateError(err))
 		return
 	}
 
