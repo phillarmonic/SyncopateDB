@@ -401,7 +401,7 @@ func (pe *Engine) applyOperation(store common.DatastoreEngine, op int, entityTyp
 		return store.Update(entityType, entityID, fields)
 
 	case OpDeleteEntity:
-		return store.Delete(entityID)
+		return store.Delete(entityType, entityID)
 
 	default:
 		return fmt.Errorf("unknown operation: %d", op)

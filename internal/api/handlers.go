@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/phillarmonic/syncopate-db/internal/about"
+	"github.com/phillarmonic/syncopate-db/internal/errors"
 	"github.com/phillarmonic/syncopate-db/internal/settings"
 	"github.com/sirupsen/logrus"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -76,21 +78,33 @@ func (s *Server) handleGetEntityTypes(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleCreateEntityType(w http.ResponseWriter, r *http.Request) {
 	var def common.EntityDefinition
 	if err := json.NewDecoder(r.Body).Decode(&def); err != nil {
-		s.respondWithError(w, http.StatusBadRequest, "Invalid request payload")
+		s.respondWithError(w, http.StatusBadRequest, "Invalid request payload",
+			errors.NewError(errors.ErrCodeMalformedData, "Failed to decode entity definition"))
 		return
 	}
 	defer r.Body.Close()
 
 	// Note: If IDGenerator is an empty string, auto_increment will be used as default
 	if err := s.engine.RegisterEntityType(def); err != nil {
-		s.respondWithError(w, http.StatusBadRequest, err.Error())
+		// Convert to SyncopateError if it's not already
+		synErr := datastore.ConvertToSyncopateError(err)
+
+		// Map error code to HTTP status
+		statusCode := http.StatusBadRequest
+		if errors.IsErrorCode(synErr, errors.ErrCodeEntityTypeExists) {
+			statusCode = http.StatusConflict
+		}
+
+		s.respondWithError(w, statusCode, err.Error(), synErr)
 		return
 	}
 
 	// Get the actual definition with any defaults applied
 	updatedDef, err := s.engine.GetEntityDefinition(def.Name)
 	if err != nil {
-		s.respondWithError(w, http.StatusInternalServerError, "Entity type created but could not retrieve it")
+		s.respondWithError(w, http.StatusInternalServerError,
+			"Entity type created but could not retrieve it",
+			errors.NewError(errors.ErrCodeEntityTypeNotFound, err.Error()))
 		return
 	}
 
@@ -107,7 +121,8 @@ func (s *Server) handleGetEntityType(w http.ResponseWriter, r *http.Request) {
 
 	def, err := s.engine.GetEntityDefinition(name)
 	if err != nil {
-		s.respondWithError(w, http.StatusNotFound, err.Error())
+		s.respondWithError(w, http.StatusNotFound, err.Error(),
+			errors.NewError(errors.ErrCodeEntityTypeNotFound, fmt.Sprintf("Entity type '%s' not found", name)))
 		return
 	}
 
@@ -134,14 +149,16 @@ func (s *Server) handleListEntities(w http.ResponseWriter, r *http.Request) {
 	// Execute query
 	response, err := s.queryService.ExecutePaginatedQuery(queryOpts)
 	if err != nil {
-		s.respondWithError(w, http.StatusBadRequest, err.Error())
+		s.respondWithError(w, http.StatusBadRequest, err.Error(),
+			datastore.ConvertToSyncopateError(err))
 		return
 	}
 
 	// Get the entity definition to determine ID type
 	def, err := s.engine.GetEntityDefinition(entityType)
 	if err != nil {
-		s.respondWithError(w, http.StatusBadRequest, err.Error())
+		s.respondWithError(w, http.StatusBadRequest, err.Error(),
+			datastore.ConvertToSyncopateError(err))
 		return
 	}
 
@@ -190,7 +207,8 @@ func (s *Server) handleCreateEntity(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&entityData); err != nil {
-		s.respondWithError(w, http.StatusBadRequest, "Invalid request payload")
+		s.respondWithError(w, http.StatusBadRequest, "Invalid request payload",
+			errors.NewError(errors.ErrCodeMalformedData, "Failed to decode entity data"))
 		return
 	}
 	defer r.Body.Close()
@@ -198,13 +216,15 @@ func (s *Server) handleCreateEntity(w http.ResponseWriter, r *http.Request) {
 	// Get entity definition to check the ID generator type
 	def, err := s.engine.GetEntityDefinition(entityType)
 	if err != nil {
-		s.respondWithError(w, http.StatusBadRequest, err.Error())
+		synErr := datastore.ConvertToSyncopateError(err)
+		s.respondWithError(w, http.StatusBadRequest, err.Error(), synErr)
 		return
 	}
 
 	// Custom ID is required only if the ID generation type is custom
 	if entityData.ID == "" && def.IDGenerator == common.IDTypeCustom {
-		s.respondWithError(w, http.StatusBadRequest, "Entity ID is required for custom ID generation")
+		s.respondWithError(w, http.StatusBadRequest, "Entity ID is required for custom ID generation",
+			errors.NewError(errors.ErrCodeRequiredFieldMissing, "Entity ID is required for custom ID generation"))
 		return
 	}
 
@@ -214,12 +234,17 @@ func (s *Server) handleCreateEntity(w http.ResponseWriter, r *http.Request) {
 
 	// Insert the entity - ID will be generated if not provided
 	if err := s.engine.Insert(entityType, rawID, entityData.Fields); err != nil {
-		// Check if this is a unique constraint violation
-		if strings.Contains(err.Error(), "unique constraint violation") {
-			s.respondWithError(w, http.StatusConflict, err.Error())
-			return
+		synErr := datastore.ConvertToSyncopateError(err)
+
+		// Map specific error types to appropriate HTTP status codes
+		statusCode := http.StatusBadRequest
+		if errors.IsErrorCode(synErr, errors.ErrCodeUniqueConstraint) {
+			statusCode = http.StatusConflict
+		} else if errors.IsErrorCode(synErr, errors.ErrCodeEntityTypeNotFound) {
+			statusCode = http.StatusNotFound
 		}
-		s.respondWithError(w, http.StatusBadRequest, err.Error())
+
+		s.respondWithError(w, statusCode, err.Error(), synErr)
 		return
 	}
 
@@ -232,7 +257,8 @@ func (s *Server) handleCreateEntity(w http.ResponseWriter, r *http.Request) {
 		// A better approach would be to modify Insert to return the generated ID
 		entities, err := s.engine.GetAllEntitiesOfType(entityType)
 		if err != nil {
-			s.respondWithError(w, http.StatusInternalServerError, "Failed to retrieve entity after creation")
+			s.respondWithError(w, http.StatusInternalServerError, "Failed to retrieve entity after creation",
+				errors.NewError(errors.ErrCodeInternalServer, "Failed to retrieve entity after creation"))
 			return
 		}
 
@@ -279,7 +305,8 @@ func (s *Server) handleGetEntity(w http.ResponseWriter, r *http.Request) {
 	// Normalize the ID based on entity type's ID generator
 	normalizedID, err := s.normalizeEntityID(entityType, rawID)
 	if err != nil {
-		s.respondWithError(w, http.StatusBadRequest, err.Error())
+		synErr := datastore.ConvertToSyncopateError(err)
+		s.respondWithError(w, http.StatusBadRequest, err.Error(), synErr)
 		return
 	}
 
@@ -303,12 +330,20 @@ func (s *Server) handleGetEntity(w http.ResponseWriter, r *http.Request) {
 		entity, getErr = s.engine.Get(normalizedID)
 		// Check the type matches what we're looking for
 		if getErr == nil && entity.Type != entityType {
-			getErr = fmt.Errorf("entity with ID %s and type %s not found", normalizedID, entityType)
+			getErr = datastore.EntityNotFoundError(entityType, normalizedID)
 		}
 	}
 
 	if getErr != nil {
-		s.respondWithError(w, http.StatusNotFound, getErr.Error())
+		synErr := datastore.ConvertToSyncopateError(getErr)
+		statusCode := http.StatusNotFound
+
+		// For certain error types, use a different status code
+		if errors.IsErrorCode(synErr, errors.ErrCodeInvalidID) {
+			statusCode = http.StatusBadRequest
+		}
+
+		s.respondWithError(w, statusCode, getErr.Error(), synErr)
 		return
 	}
 
@@ -328,7 +363,8 @@ func (s *Server) handleUpdateEntity(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&updateData); err != nil {
-		s.respondWithError(w, http.StatusBadRequest, "Invalid request payload")
+		s.respondWithError(w, http.StatusBadRequest, "Invalid request payload",
+			errors.NewError(errors.ErrCodeMalformedData, "Failed to decode update data"))
 		return
 	}
 	defer r.Body.Close()
@@ -336,7 +372,8 @@ func (s *Server) handleUpdateEntity(w http.ResponseWriter, r *http.Request) {
 	// Normalize the ID based on entity type's ID generator
 	normalizedID, err := s.normalizeEntityID(entityType, rawID)
 	if err != nil {
-		s.respondWithError(w, http.StatusBadRequest, err.Error())
+		s.respondWithError(w, http.StatusBadRequest, err.Error(),
+			errors.NewError(errors.ErrCodeInvalidID, err.Error()))
 		return
 	}
 
@@ -351,12 +388,17 @@ func (s *Server) handleUpdateEntity(w http.ResponseWriter, r *http.Request) {
 
 	// Use the new type-safe Update method
 	if err := s.engine.Update(entityType, normalizedID, updateData.Fields); err != nil {
-		// Check if this is a unique constraint violation
-		if strings.Contains(err.Error(), "unique constraint violation") {
-			s.respondWithError(w, http.StatusConflict, err.Error())
-			return
+		synErr := datastore.ConvertToSyncopateError(err)
+		statusCode := http.StatusBadRequest
+
+		// Check for specific error types
+		if errors.IsErrorCode(synErr, errors.ErrCodeUniqueConstraint) {
+			statusCode = http.StatusConflict
+		} else if errors.IsErrorCode(synErr, errors.ErrCodeEntityNotFound) {
+			statusCode = http.StatusNotFound
 		}
-		s.respondWithError(w, http.StatusBadRequest, err.Error())
+
+		s.respondWithError(w, statusCode, err.Error(), synErr)
 		return
 	}
 
@@ -389,12 +431,12 @@ func (s *Server) handleDeleteEntity(w http.ResponseWriter, r *http.Request) {
 	// Get entity definition to determine ID type
 	def, err := s.engine.GetEntityDefinition(entityType)
 	if err != nil {
-		s.respondWithError(w, http.StatusBadRequest, err.Error())
+		s.respondWithError(w, http.StatusBadRequest, err.Error(),
+			datastore.ConvertToSyncopateError(err))
 		return
 	}
 
 	// Special handling for auto-increment IDs
-	var entityID string = rawID
 	if def.IDGenerator == common.IDTypeAutoIncrement {
 		// IMPORTANT: For auto-increment, we need to make sure we're using
 		// exactly the same string format as when it was stored
@@ -416,11 +458,11 @@ func (s *Server) handleDeleteEntity(w http.ResponseWriter, r *http.Request) {
 
 		// Try each format until we find the entity
 		entityFound := false
-		for _, fmt := range formats {
+		for _, format := range formats {
 			// Try to get the entity with this format
-			if _, err := s.engine.Get(fmt); err == nil {
+			if _, err := s.engine.Get(format); err == nil {
 				// Found it! Use this format for deletion
-				entityID = fmt
+				rawID = format
 				entityFound = true
 				break
 			}
@@ -432,9 +474,8 @@ func (s *Server) handleDeleteEntity(w http.ResponseWriter, r *http.Request) {
 			if ok {
 				engine.DebugInspectEntities(func(entities map[string]common.Entity) {
 					// Look for an entity with matching ID and type
-					for key, entity := range entities {
+					for _, entity := range entities {
 						if entity.Type == entityType && entity.ID == rawID {
-							entityID = key
 							entityFound = true
 							break
 						}
@@ -443,24 +484,36 @@ func (s *Server) handleDeleteEntity(w http.ResponseWriter, r *http.Request) {
 			}
 
 			if !entityFound {
-				s.respondWithError(w, http.StatusNotFound, "Entity not found with any ID format")
+				s.respondWithError(w, http.StatusNotFound, "Entity not found with any ID format",
+					errors.NewError(errors.ErrCodeEntityNotFound,
+						fmt.Sprintf("Entity with ID '%s' and type '%s' not found", rawID, entityType)))
 				return
 			}
 		}
 	}
 
-	// At this point, we should have the right entityID format
+	// Normalize the ID to ensure it is in the correct format for internal use
+	// For auto_increment IDs, this will ensure it's the simple numeric string.
+	// For UUIDs, it standardizes casing etc.
+	normalizedID, err := s.normalizeEntityID(entityType, rawID)
+	if err != nil {
+		s.respondWithError(w, http.StatusBadRequest, err.Error(),
+			errors.NewError(errors.ErrCodeInvalidID, err.Error()))
+		return
+	}
+
+	// At this point, we should have the right format
 	if s.config.DebugMode {
 		s.logger.WithFields(logrus.Fields{
-			"entityType": entityType,
-			"rawID":      rawID,
-			"entityID":   entityID,
+			"entityType":   entityType,   // This is from the URL, e.g., "posts"
+			"rawID":        rawID,        // e.g., "1"
+			"normalizedID": normalizedID, // e.g., "1"
 		}).Debug("Deleting entity")
 	}
 
-	// Use the properly formatted entity ID for deletion
-	if err := s.engine.Delete(entityID); err != nil {
-		s.respondWithError(w, http.StatusBadRequest, err.Error())
+	if err := s.engine.Delete(entityType, normalizedID); err != nil {
+		s.respondWithError(w, http.StatusBadRequest, err.Error(),
+			datastore.ConvertToSyncopateError(err))
 		return
 	}
 
@@ -484,21 +537,24 @@ func (s *Server) handleDeleteEntity(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 	var queryOpts datastore.QueryOptions
 	if err := json.NewDecoder(r.Body).Decode(&queryOpts); err != nil {
-		s.respondWithError(w, http.StatusBadRequest, "Invalid request payload")
+		s.respondWithError(w, http.StatusBadRequest, "Invalid request payload",
+			errors.NewError(errors.ErrCodeMalformedData, "Failed to decode query options"))
 		return
 	}
 	defer r.Body.Close()
 
 	response, err := s.queryService.ExecutePaginatedQuery(queryOpts)
 	if err != nil {
-		s.respondWithError(w, http.StatusBadRequest, err.Error())
+		synErr := datastore.ConvertToSyncopateError(err)
+		s.respondWithError(w, http.StatusBadRequest, err.Error(), synErr)
 		return
 	}
 
 	// Get the entity definition to determine ID type
 	def, err := s.engine.GetEntityDefinition(queryOpts.EntityType)
 	if err != nil {
-		s.respondWithError(w, http.StatusBadRequest, err.Error())
+		synErr := datastore.ConvertToSyncopateError(err)
+		s.respondWithError(w, http.StatusBadRequest, err.Error(), synErr)
 		return
 	}
 
@@ -652,14 +708,16 @@ func (s *Server) handleUpdateEntityType(w http.ResponseWriter, r *http.Request) 
 	// First check if the entity type exists
 	originalDef, err := s.engine.GetEntityDefinition(name)
 	if err != nil {
-		s.respondWithError(w, http.StatusNotFound, fmt.Sprintf("Entity type '%s' not found", name))
+		s.respondWithError(w, http.StatusNotFound, fmt.Sprintf("Entity type '%s' not found", name),
+			errors.NewError(errors.ErrCodeEntityTypeNotFound, fmt.Sprintf("Entity type '%s' not found", name)))
 		return
 	}
 
 	// Parse the updated definition
 	var updatedDef common.EntityDefinition
 	if err := json.NewDecoder(r.Body).Decode(&updatedDef); err != nil {
-		s.respondWithError(w, http.StatusBadRequest, "Invalid request payload")
+		s.respondWithError(w, http.StatusBadRequest, "Invalid request payload",
+			errors.NewError(errors.ErrCodeMalformedData, "Failed to decode entity definition"))
 		return
 	}
 	defer r.Body.Close()
@@ -667,7 +725,8 @@ func (s *Server) handleUpdateEntityType(w http.ResponseWriter, r *http.Request) 
 	// Ensure the name in the payload matches the URL
 	if updatedDef.Name != name {
 		s.respondWithError(w, http.StatusBadRequest,
-			"Entity type name in payload doesn't match URL parameter")
+			"Entity type name in payload doesn't match URL parameter",
+			errors.NewError(errors.ErrCodeInvalidEntityType, "Entity type name in payload doesn't match URL parameter"))
 		return
 	}
 
@@ -675,7 +734,8 @@ func (s *Server) handleUpdateEntityType(w http.ResponseWriter, r *http.Request) 
 	// complex ID migration issues
 	if updatedDef.IDGenerator != "" && updatedDef.IDGenerator != originalDef.IDGenerator {
 		s.respondWithError(w, http.StatusBadRequest,
-			"Cannot change the ID generator after entity type creation")
+			"Cannot change the ID generator after entity type creation",
+			errors.NewError(errors.ErrCodeIDGeneratorChange, "Cannot change the ID generator after entity type creation"))
 		return
 	}
 
@@ -701,7 +761,8 @@ func (s *Server) handleUpdateEntityType(w http.ResponseWriter, r *http.Request) 
 
 	// Update the entity type
 	if err := s.engine.UpdateEntityType(updatedDef); err != nil {
-		s.respondWithError(w, http.StatusBadRequest, err.Error())
+		s.respondWithError(w, http.StatusBadRequest, err.Error(),
+			datastore.ConvertToSyncopateError(err))
 		return
 	}
 
@@ -709,7 +770,8 @@ func (s *Server) handleUpdateEntityType(w http.ResponseWriter, r *http.Request) 
 	updatedDef, err = s.engine.GetEntityDefinition(name)
 	if err != nil {
 		s.respondWithError(w, http.StatusInternalServerError,
-			"Entity type updated but could not retrieve it")
+			"Entity type updated but could not retrieve it",
+			errors.NewError(errors.ErrCodeInternalServer, "Entity type updated but could not retrieve it"))
 		return
 	}
 
@@ -746,8 +808,9 @@ func (s *Server) handleUpdateEntityType(w http.ResponseWriter, r *http.Request) 
 	s.respondWithJSON(w, http.StatusOK, response)
 }
 
+// handleDebugSchema provides detailed schema information for debugging purposes
 func (s *Server) handleDebugSchema(w http.ResponseWriter, r *http.Request) {
-	// Get entity type from query parameter
+	// Get an entity type from query parameter
 	entityType := r.URL.Query().Get("type")
 
 	if entityType == "" {
@@ -758,6 +821,11 @@ func (s *Server) handleDebugSchema(w http.ResponseWriter, r *http.Request) {
 		for _, typeName := range types {
 			def, err := s.engine.GetEntityDefinition(typeName)
 			if err != nil {
+				// Log the error but continue with other types
+				s.logger.WithFields(logrus.Fields{
+					"entity_type": typeName,
+					"error":       err.Error(),
+				}).Warn("Failed to get entity definition during debug schema request")
 				continue
 			}
 			schemas[typeName] = def
@@ -772,7 +840,10 @@ func (s *Server) handleDebugSchema(w http.ResponseWriter, r *http.Request) {
 	// Get definition for specific entity type
 	def, err := s.engine.GetEntityDefinition(entityType)
 	if err != nil {
-		s.respondWithError(w, http.StatusNotFound, fmt.Sprintf("Entity type '%s' not found", entityType))
+		s.respondWithError(w, http.StatusNotFound,
+			fmt.Sprintf("Entity type '%s' not found", entityType),
+			errors.NewError(errors.ErrCodeEntityTypeNotFound,
+				fmt.Sprintf("Entity type '%s' not found", entityType)))
 		return
 	}
 
@@ -790,7 +861,15 @@ func (s *Server) handleDebugSchema(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get count of entities with this type
-	count, _ := s.engine.GetEntityCount(entityType)
+	count, err := s.engine.GetEntityCount(entityType)
+	if err != nil {
+		// Don't fail the request, but log the error
+		s.logger.WithFields(logrus.Fields{
+			"entity_type": entityType,
+			"error":       err.Error(),
+		}).Warn("Failed to get entity count during debug schema request")
+		count = -1 // Indicate count error
+	}
 
 	s.respondWithJSON(w, http.StatusOK, map[string]interface{}{
 		"entity_type":  def.Name,
@@ -804,7 +883,8 @@ func (s *Server) handleDebugSchema(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleCountQuery(w http.ResponseWriter, r *http.Request) {
 	var queryOpts datastore.QueryOptions
 	if err := json.NewDecoder(r.Body).Decode(&queryOpts); err != nil {
-		s.respondWithError(w, http.StatusBadRequest, "Invalid request payload")
+		s.respondWithError(w, http.StatusBadRequest, "Invalid request payload",
+			errors.NewError(errors.ErrCodeMalformedData, "Failed to decode query options"))
 		return
 	}
 	defer r.Body.Close()
@@ -824,7 +904,8 @@ func (s *Server) handleCountQuery(w http.ResponseWriter, r *http.Request) {
 	// Execute the auto-optimizing count query
 	count, err := s.queryService.ExecuteCountQuery(queryOpts)
 	if err != nil {
-		s.respondWithError(w, http.StatusBadRequest, err.Error())
+		s.respondWithError(w, http.StatusBadRequest, err.Error(),
+			datastore.ConvertToSyncopateError(err))
 		return
 	}
 
@@ -848,6 +929,134 @@ func (s *Server) handleCountQuery(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.respondWithJSON(w, http.StatusOK, response)
+}
+
+// handleErrorCodes returns documentation for all error codes
+func (s *Server) handleErrorCodes(w http.ResponseWriter, r *http.Request) {
+	// Get query parameters
+	codeParam := r.URL.Query().Get("code")
+	categoryParam := r.URL.Query().Get("category")
+	formatParam := r.URL.Query().Get("format")
+	httpStatusParam := r.URL.Query().Get("http_status")
+
+	// Handle specific error code request
+	if codeParam != "" {
+		// Return details for a specific error code
+		if doc, exists := errors.ErrorCodeDocs[errors.ErrorCode(codeParam)]; exists {
+			s.respondWithJSON(w, http.StatusOK, doc, true)
+			return
+		}
+
+		s.respondWithError(w, http.StatusNotFound, "Error code not found",
+			errors.NewError(errors.ErrCodeInvalidRequest,
+				fmt.Sprintf("Error code '%s' not found", codeParam)))
+		return
+	}
+
+	// Group error codes by category
+	categories := make(map[string][]errors.ErrorCodeDoc)
+
+	for _, doc := range errors.ErrorCodeDocs {
+		// Filter by category if specified
+		if categoryParam != "" && strings.ToLower(errors.CategoryForErrorCode(doc.Code)) != strings.ToLower(categoryParam) {
+			continue
+		}
+
+		// Filter by HTTP status if specified
+		if httpStatusParam != "" {
+			status, err := strconv.Atoi(httpStatusParam)
+			if err != nil || doc.HTTPStatus != status {
+				continue
+			}
+		}
+
+		category := errors.CategoryForErrorCode(doc.Code)
+		categories[category] = append(categories[category], doc)
+	}
+
+	// Sort error codes within each category
+	for category := range categories {
+		sort.Slice(categories[category], func(i, j int) bool {
+			return string(categories[category][i].Code) < string(categories[category][j].Code)
+		})
+	}
+
+	// Plain text format
+	if formatParam == "text" {
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusOK)
+
+		fmt.Fprintf(w, "SYNCOPATEDB ERROR CODES\n")
+		fmt.Fprintf(w, "=====================\n\n")
+
+		totalCodes := 0
+
+		for category, docs := range categories {
+			fmt.Fprintf(w, "%s Errors:\n", category)
+			fmt.Fprintf(w, "%s\n\n", strings.Repeat("-", len(category)+8))
+
+			for _, doc := range docs {
+				fmt.Fprintf(w, "Code:        %s\n", doc.Code)
+				fmt.Fprintf(w, "Name:        %s\n", doc.Name)
+				fmt.Fprintf(w, "Description: %s\n", doc.Description)
+				fmt.Fprintf(w, "HTTP Status: %d\n", doc.HTTPStatus)
+				fmt.Fprintf(w, "Example:     %s\n\n", doc.Example)
+
+				totalCodes++
+			}
+		}
+
+		fmt.Fprintf(w, "Total Error Codes: %d\n", totalCodes)
+		return
+	}
+
+	// Get all available categories
+	allCategories := make([]string, 0, len(categories))
+	for category := range categories {
+		allCategories = append(allCategories, category)
+	}
+	sort.Strings(allCategories)
+
+	// Get all available HTTP status codes
+	httpStatuses := make(map[int]string)
+	for _, doc := range errors.ErrorCodeDocs {
+		if _, exists := httpStatuses[doc.HTTPStatus]; !exists {
+			httpStatuses[doc.HTTPStatus] = http.StatusText(doc.HTTPStatus)
+		}
+	}
+
+	// Build HTTP status list in order
+	statusList := make([]map[string]interface{}, 0, len(httpStatuses))
+	for code, text := range httpStatuses {
+		statusList = append(statusList, map[string]interface{}{
+			"code": code,
+			"text": text,
+		})
+	}
+
+	// Sort by status code
+	sort.Slice(statusList, func(i, j int) bool {
+		return statusList[i]["code"].(int) < statusList[j]["code"].(int)
+	})
+
+	// Create response with metadata
+	response := map[string]interface{}{
+		"total_error_codes": len(errors.ErrorCodeDocs),
+		"categories":        categories,
+		"available_filters": map[string]interface{}{
+			"categories":    allCategories,
+			"http_statuses": statusList,
+		},
+		"usage": map[string]interface{}{
+			"all_codes":      "/api/v1/errors",
+			"specific_code":  "/api/v1/errors?code=SY001",
+			"by_category":    "/api/v1/errors?category=Entity",
+			"by_http_status": "/api/v1/errors?http_status=404",
+			"plain_text":     "/api/v1/errors?format=text",
+		},
+	}
+
+	s.respondWithJSON(w, http.StatusOK, response, true)
 }
 
 // CountResponse structure for count query responses

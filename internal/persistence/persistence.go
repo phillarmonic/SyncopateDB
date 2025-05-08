@@ -456,17 +456,16 @@ func (pe *Engine) Update(store common.DatastoreEngine, entityType string, entity
 
 // Delete removes an entity and persists the deletion
 func (pe *Engine) Delete(store common.DatastoreEngine, entityID string, entityType string) error {
-	// No need to look up the entity anymore, we have the entityType parameter
-
-	// If WAL is disabled, delete it directly from the database
 	if !settings.Config.EnableWAL {
+		// Key becomes, e.g., "entity:product:product:123" (using entityType and composite entityID)
 		key := fmt.Sprintf("entity:%s:%s", entityType, entityID)
+		// This key ("entity:product:product:123") likely doesn't match the stored key ("entity:product:123").
+		// So, txn.Delete() might silently fail to delete the actual Badger entry.
 		return pe.db.Update(func(txn *badger.Txn) error {
 			return txn.Delete([]byte(key))
 		})
 	}
-
-	// Write to WAL
+	// For WAL, entry.EntityID becomes "product:123", WAL key becomes "wal:...:product:product:123"
 	return pe.WriteWALEntry(OpDeleteEntity, entityType, entityID, nil)
 }
 
@@ -810,7 +809,7 @@ func (pe *Engine) applyOperationWithErrorHandling(store common.DatastoreEngine, 
 			return nil
 		}
 
-		return store.Delete(entityID)
+		return store.Delete(entityType, entityID)
 
 	case OpUpdateEntityType:
 		var def common.EntityDefinition

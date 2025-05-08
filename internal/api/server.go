@@ -168,6 +168,7 @@ func (s *Server) setupRoutes() {
 	// Diagnostics route
 	api.HandleFunc("/diagnostics", s.handleDiagnostics).Methods(http.MethodGet)
 	api.HandleFunc("/compression", s.compressionInfoHandler).Methods(http.MethodGet)
+	api.HandleFunc("/error_codes", s.handleErrorCodes).Methods(http.MethodGet)
 }
 
 // handleDebug provides a debug endpoint for testing when in debug mode

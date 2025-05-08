@@ -63,6 +63,7 @@ SyncopateDB is the right choice for you if you require:
   - [Entities](#entities)
   - [Querying](#querying)
   - [Joins](#joins)
+  - [Error Codes](#error-codes)
 - [Examples](#examples)
   - [Creating Entity Types](#creating-entity-types)
   - [Updating Entity Types](#updating-entity-types)
@@ -175,6 +176,18 @@ SyncopateDB supports advanced querying with filtering, sorting, and pagination.
 | POST   | /api/v1/query/count | Count matching entities without data |
 | POST   | /api/v1/query/join  | Execute a query with joins           |
 
+### Error Codes
+
+SyncopateDB provides comprehensive error code documentation to help you understand and handle errors in your applications.
+
+| Method | Endpoint                       | Description                                |
+| ------ | ------------------------------ | ------------------------------------------ |
+| GET    | /api/v1/errors                 | List all error codes organized by category |
+| GET    | /api/v1/errors?code=SY001      | Get details about a specific error code    |
+| GET    | /api/v1/errors?category=Entity | Filter error codes by category             |
+| GET    | /api/v1/errors?http_status=404 | Filter error codes by HTTP status          |
+| GET    | /api/v1/errors?format=text     | Return error codes in plain text format    |
+
 ## Examples
 
 ### Creating Entity Types
@@ -213,8 +226,6 @@ SyncopateDB supports unique constraints on entity fields. A unique constraint en
    - Uniqueness is enforced per-field, not across combinations of fields
    - String comparisons are case-sensitive
    - Multiple entities can have `null` for a unique field (uniqueness applies only to non-null values)
-
-
 
 Pro tip: If you want to use auto_increment, you can omit it from the payload and it'll be automatically selected.
 
@@ -885,6 +896,111 @@ This query will return published posts with both author information and all comm
 - **filters**: Optional filters to apply to the joined entities
 - **includeFields**: Fields to include from the joined entities (empty = all)
 - **excludeFields**: Fields to exclude from the joined entities
+
+## Working with Error Codes
+
+SyncopateDB provides a comprehensive error system with detailed error codes to help you diagnose and handle errors effectively in your applications.
+
+#### Exploring Error Codes
+
+To explore all available error codes and their meanings:
+
+```bash
+# Get all error codes organized by category
+curl -X GET http://localhost:8080/api/v1/errors
+
+# Get all error codes in plain text format
+curl -X GET "http://localhost:8080/api/v1/errors?format=text"
+```
+
+#### Looking Up Specific Error Codes
+
+When you receive an error with a specific code (e.g., SY201), you can look up its meaning:
+
+```bash
+# Get details for a specific error code
+curl -X GET "http://localhost:8080/api/v1/errors?code=SY201"
+```
+
+This will return detailed information about the error:
+
+```json
+{
+  "code": "SY201",
+  "name": "Entity Already Exists",
+  "description": "An entity with this ID already exists",
+  "httpStatus": 409,
+  "example": "{\"error\":\"Conflict\",\"message\":\"entity with ID '123' already exists for entity type 'products'\",\"code\":409,\"db_code\":\"SY201\"}"
+}
+```
+
+#### Filtering Error Codes by Category
+
+You can filter error codes by category to explore related errors:
+
+```bash
+# Get all entity-related errors
+curl -X GET "http://localhost:8080/api/v1/errors?category=Entity"
+
+# Get all query-related errors
+curl -X GET "http://localhost:8080/api/v1/errors?category=Query"
+```
+
+#### Filtering by HTTP Status Code
+
+If you're interested in all errors that return a specific HTTP status code:
+
+```bash
+# Get all errors that return 404 Not Found
+curl -X GET "http://localhost:8080/api/v1/errors?http_status=404"
+
+# Get all errors that return 409 Conflict
+curl -X GET "http://localhost:8080/api/v1/errors?http_status=409"
+```
+
+#### Client-Side Error Handling Example
+
+Here's an example of how to handle errors in a client application:
+
+```javascript
+async function createEntity(entityType, data) {
+  try {
+    const response = await fetch(`http://localhost:8080/api/v1/entities/${entityType}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fields: data })
+    });
+
+    const result = await response.json();
+
+    if (!response.ok) {
+      // Handle specific error codes
+      switch (result.db_code) {
+        case 'SY101':
+          console.error('Entity type already exists. Try a different name.');
+          break;
+        case 'SY201':
+          console.error('Entity with this ID already exists. Use a different ID or let the system generate one.');
+          break;
+        case 'SY209':
+          console.error('Unique constraint violation: ' + result.message);
+          break;
+        default:
+          console.error(`Error: ${result.message} (Code: ${result.db_code})`);
+      }
+      // Look up more details about the error
+      const errorDetails = await fetch(`http://localhost:8080/api/v1/errors?code=${result.db_code}`).then(r => r.json());
+      console.log('Error details:', errorDetails.description);
+      return null;
+    }
+
+    return result;
+  } catch (error) {
+    console.error('Network or parsing error:', error);
+    return null;
+  }
+}
+```
 
 ## ID Generation Strategies
 
