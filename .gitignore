@@ -97,3 +97,6 @@ Temporary Items
 bundle
 data
 tmp
+
+*.orig
+paste.txt

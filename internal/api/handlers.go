@@ -416,11 +416,11 @@ func (s *Server) handleDeleteEntity(w http.ResponseWriter, r *http.Request) {
 
 		// Try each format until we find the entity
 		entityFound := false
-		for _, fmt := range formats {
+		for _, format := range formats {
 			// Try to get the entity with this format
-			if _, err := s.engine.Get(fmt); err == nil {
+			if _, err := s.engine.Get(format); err == nil {
 				// Found it! Use this format for deletion
-				entityID = fmt
+				entityID = format
 				entityFound = true
 				break
 			}
@@ -432,9 +432,9 @@ func (s *Server) handleDeleteEntity(w http.ResponseWriter, r *http.Request) {
 			if ok {
 				engine.DebugInspectEntities(func(entities map[string]common.Entity) {
 					// Look for an entity with matching ID and type
-					for key, entity := range entities {
+					for _, entity := range entities {
 						if entity.Type == entityType && entity.ID == rawID {
-							entityID = key
+							entityID = rawID
 							entityFound = true
 							break
 						}
@@ -449,17 +449,25 @@ func (s *Server) handleDeleteEntity(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Normalize the ID to ensure it is in the correct format for internal use
+	// For auto_increment IDs, this will ensure it's the simple numeric string.
+	// For UUIDs, it standardizes casing etc.
+	normalizedID, err := s.normalizeEntityID(entityType, rawID)
+	if err != nil {
+		s.respondWithError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	// At this point, we should have the right entityID format
 	if s.config.DebugMode {
 		s.logger.WithFields(logrus.Fields{
-			"entityType": entityType,
-			"rawID":      rawID,
-			"entityID":   entityID,
+			"entityType":   entityType,   // This is from the URL, e.g., "posts"
+			"rawID":        rawID,        // e.g., "1"
+			"normalizedID": normalizedID, // e.g., "1"
 		}).Debug("Deleting entity")
 	}
 
-	// Use the properly formatted entity ID for deletion
-	if err := s.engine.Delete(entityID); err != nil {
+	if err := s.engine.Delete(entityType, normalizedID); err != nil {
 		s.respondWithError(w, http.StatusBadRequest, err.Error())
 		return
 	}

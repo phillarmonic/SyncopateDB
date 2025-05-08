@@ -44,7 +44,7 @@ type DatastoreEngine interface {
 	ListEntityTypes() []string
 	Insert(entityType, id string, data map[string]interface{}) error
 	Update(entityType string, id string, data map[string]interface{}) error // Updated signature
-	Delete(id string) error
+	Delete(entityType string, id string) error
 	Get(id string) (Entity, error)
 	GetEntityCount(entityType string) (int, error)
 	GetAllEntitiesOfType(entityType string) ([]Entity, error)

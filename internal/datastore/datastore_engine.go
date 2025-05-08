@@ -488,67 +488,78 @@ func (dse *Engine) Update(entityType string, id string, data map[string]interfac
 }
 
 // Delete removes an entity from the data store engine
-func (dse *Engine) Delete(id string) error {
+func (dse *Engine) Delete(entityTypeToDelete string, id string) error {
 	// First read the current state without write lock
 	dse.mu.RLock()
 
-	// Find the entity by iterating through the map (backward compatibility)
-	var entity common.Entity
-	var entityKey string
-	var exists bool
+	var entityToProcess common.Entity
+	var actualEntityKey string // The key in dse.entities map, e.g., "posts:1"
+	var entityFound bool
 
-	// First try to find by direct ID (backward compatibility)
-	entity, exists = dse.entities[id]
-	if exists {
-		entityKey = id
-	} else {
-		// If not found, check for composite keys
-		for key, e := range dse.entities {
-			_, entityID := parseEntityKey(key)
-			if entityID == id {
-				entity = e
-				entityKey = key
-				exists = true
-				break
+	// Priority 1: Try with the precise composite key "{entityTypeToDelete}:{id}"
+	preciseKey := createEntityKey(entityTypeToDelete, id)
+	if e, ok := dse.entities[preciseKey]; ok {
+		entityToProcess = e
+		actualEntityKey = preciseKey
+		entityFound = true
+	}
+
+	// Priority 2: Fallback for potential legacy keys or general search if preciseKey fails.
+	if !entityFound {
+		// Check if `id` itself is a key (legacy) and if its type matches.
+		if e, ok := dse.entities[id]; ok && e.Type == entityTypeToDelete {
+			entityToProcess = e
+			actualEntityKey = id // id here is the key
+			entityFound = true
+		} else {
+			// Iterate to find a composite key that matches ID and Type.
+			for keyInMap, e := range dse.entities {
+				_, idFromKey := parseEntityKey(keyInMap)
+				if idFromKey == id && e.Type == entityTypeToDelete {
+					entityToProcess = e
+					actualEntityKey = keyInMap
+					entityFound = true
+					break // Found the correct entity matching ID and Type
+				}
 			}
 		}
 	}
 
-	if !exists {
+	if !entityFound {
 		dse.mu.RUnlock()
-		return fmt.Errorf("entity with ID %s not found", id)
+		return fmt.Errorf("entity with ID %s and type %s not found", id, entityTypeToDelete)
 	}
 
 	// Make a copy of the entity for persistence and rollback
 	originalEntity := common.Entity{
-		ID:     entity.ID,
-		Type:   entity.Type,
+		ID:     entityToProcess.ID,
+		Type:   entityToProcess.Type,
 		Fields: make(map[string]interface{}),
 	}
 
-	for k, v := range entity.Fields {
+	for k, v := range entityToProcess.Fields {
 		originalEntity.Fields[k] = v
 	}
 
 	// Store the entity type for persistence
-	entityType := entity.Type
+	entityTypeForPersistence := entityToProcess.Type
 
 	dse.mu.RUnlock()
 
 	// Get entity definition to determine ID type
-	idGeneratorType, err := dse.GetIDGeneratorType(entityType)
+	idGeneratorType, err := dse.GetIDGeneratorType(entityTypeToDelete)
 	if err == nil && idGeneratorType == common.IDTypeAutoIncrement {
 		// For auto-increment, mark this ID as deleted to prevent reuse
-		generator, err := dse.idGeneratorMgr.GetGenerator(entityType)
+		generator, err := dse.idGeneratorMgr.GetGenerator(entityTypeToDelete)
 		if err == nil {
 			if autoGen, ok := generator.(*AutoIncrementGenerator); ok {
-				autoGen.MarkIDDeleted(entityType, id)
+				autoGen.MarkIDDeleted(entityTypeToDelete, id)
 
 				// Save the updated deleted IDs list if persistence is enabled
 				if dse.persistence != nil {
 					if persistenceWithDeletedIDs, ok := dse.persistence.(common.PersistenceWithDeletedIDs); ok {
-						deletedIDs := autoGen.SaveDeletedIDs(entityType)
-						if err := persistenceWithDeletedIDs.SaveDeletedIDs(entityType, deletedIDs); err != nil {
+						deletedIDs := autoGen.SaveDeletedIDs(entityTypeToDelete)
+						if err := persistenceWithDeletedIDs.SaveDeletedIDs(entityTypeToDelete, deletedIDs); err != nil {
 							// Just log the error, don't fail the delete
 							fmt.Printf("Error saving deleted IDs: %v\n", err)
 						}
@@ -562,17 +573,23 @@ func (dse *Engine) Delete(id string) error {
 	dse.mu.Lock()
 
 	// Check again if the entity exists
-	_, exists = dse.entities[entityKey]
-	if !exists {
+	currentEntityInMap, currentExists := dse.entities[actualEntityKey]
+	if !currentExists {
 		dse.mu.Unlock()
-		return fmt.Errorf("entity with ID %s not found", id)
+		return fmt.Errorf("entity with ID %s and type %s not found (disappeared before write lock)", id, entityTypeToDelete)
+	}
+	// Paranoia check: ensure the entity we're about to delete is still the one we expect.
+	if currentEntityInMap.ID != id || currentEntityInMap.Type != entityTypeToDelete {
+		dse.mu.Unlock()
+		return fmt.Errorf("entity integrity check failed before deletion for ID %s, type %s. Found ID %s, type %s at key %s",
+			id, entityTypeToDelete, currentEntityInMap.ID, currentEntityInMap.Type, actualEntityKey)
 	}
 
 	// Remove index entries
-	dse.updateIndices(entity, false)
+	dse.updateIndices(currentEntityInMap, false)
 
 	// Delete the entity
-	delete(dse.entities, entityKey)
+	delete(dse.entities, actualEntityKey)
 
 	// Store reference to persistence provider and release lock
 	persistenceProvider := dse.persistence
@@ -580,11 +597,11 @@ func (dse *Engine) Delete(id string) error {
 
 	// Persist deletion if persistence is enabled
 	if persistenceProvider != nil {
-		// Pass the entity type we saved earlier
-		if err := persistenceProvider.Delete(dse, id, entityType); err != nil {
+		// Pass the simple `id` and `entityTypeForPersistence`
+		if err := persistenceProvider.Delete(dse, id, entityTypeForPersistence); err != nil {
 			// Rollback in-memory state on error
 			dse.mu.Lock()
-			dse.entities[entityKey] = originalEntity
+			dse.entities[actualEntityKey] = originalEntity
 			dse.updateIndices(originalEntity, true)
 			dse.mu.Unlock()
 
