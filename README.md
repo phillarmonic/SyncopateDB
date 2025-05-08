@@ -63,6 +63,7 @@ SyncopateDB is the right choice for you if you require:
   - [Entities](#entities)
   - [Querying](#querying)
   - [Joins](#joins)
+  - [Error Codes](#error-codes)
 - [Examples](#examples)
   - [Creating Entity Types](#creating-entity-types)
   - [Updating Entity Types](#updating-entity-types)
@@ -175,6 +176,18 @@ SyncopateDB supports advanced querying with filtering, sorting, and pagination.
 | POST   | /api/v1/query/count | Count matching entities without data |
 | POST   | /api/v1/query/join  | Execute a query with joins           |
 
+### Error Codes
+
+SyncopateDB provides comprehensive error code documentation to help you understand and handle errors in your applications.
+
+| Method | Endpoint                       | Description                                |
+| ------ | ------------------------------ | ------------------------------------------ |
+| GET    | /api/v1/errors                 | List all error codes organized by category |
+| GET    | /api/v1/errors?code=SY001      | Get details about a specific error code    |
+| GET    | /api/v1/errors?category=Entity | Filter error codes by category             |
+| GET    | /api/v1/errors?http_status=404 | Filter error codes by HTTP status          |
+| GET    | /api/v1/errors?format=text     | Return error codes in plain text format    |
+
 ## Examples
 
 ### Creating Entity Types
@@ -213,8 +226,6 @@ SyncopateDB supports unique constraints on entity fields. A unique constraint en
    - Uniqueness is enforced per-field, not across combinations of fields
    - String comparisons are case-sensitive
    - Multiple entities can have `null` for a unique field (uniqueness applies only to non-null values)
-
-
 
 Pro tip: If you want to use auto_increment, you can omit it from the payload and it'll be automatically selected.
 
