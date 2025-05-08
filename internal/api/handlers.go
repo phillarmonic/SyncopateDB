@@ -9,6 +9,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -928,6 +929,134 @@ func (s *Server) handleCountQuery(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.respondWithJSON(w, http.StatusOK, response)
+}
+
+// handleErrorCodes returns documentation for all error codes
+func (s *Server) handleErrorCodes(w http.ResponseWriter, r *http.Request) {
+	// Get query parameters
+	codeParam := r.URL.Query().Get("code")
+	categoryParam := r.URL.Query().Get("category")
+	formatParam := r.URL.Query().Get("format")
+	httpStatusParam := r.URL.Query().Get("http_status")
+
+	// Handle specific error code request
+	if codeParam != "" {
+		// Return details for a specific error code
+		if doc, exists := errors.ErrorCodeDocs[errors.ErrorCode(codeParam)]; exists {
+			s.respondWithJSON(w, http.StatusOK, doc, true)
+			return
+		}
+
+		s.respondWithError(w, http.StatusNotFound, "Error code not found",
+			errors.NewError(errors.ErrCodeInvalidRequest,
+				fmt.Sprintf("Error code '%s' not found", codeParam)))
+		return
+	}
+
+	// Group error codes by category
+	categories := make(map[string][]errors.ErrorCodeDoc)
+
+	for _, doc := range errors.ErrorCodeDocs {
+		// Filter by category if specified
+		if categoryParam != "" && strings.ToLower(errors.CategoryForErrorCode(doc.Code)) != strings.ToLower(categoryParam) {
+			continue
+		}
+
+		// Filter by HTTP status if specified
+		if httpStatusParam != "" {
+			status, err := strconv.Atoi(httpStatusParam)
+			if err != nil || doc.HTTPStatus != status {
+				continue
+			}
+		}
+
+		category := errors.CategoryForErrorCode(doc.Code)
+		categories[category] = append(categories[category], doc)
+	}
+
+	// Sort error codes within each category
+	for category := range categories {
+		sort.Slice(categories[category], func(i, j int) bool {
+			return string(categories[category][i].Code) < string(categories[category][j].Code)
+		})
+	}
+
+	// Plain text format
+	if formatParam == "text" {
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusOK)
+
+		fmt.Fprintf(w, "SYNCOPATEDB ERROR CODES\n")
+		fmt.Fprintf(w, "=====================\n\n")
+
+		totalCodes := 0
+
+		for category, docs := range categories {
+			fmt.Fprintf(w, "%s Errors:\n", category)
+			fmt.Fprintf(w, "%s\n\n", strings.Repeat("-", len(category)+8))
+
+			for _, doc := range docs {
+				fmt.Fprintf(w, "Code:        %s\n", doc.Code)
+				fmt.Fprintf(w, "Name:        %s\n", doc.Name)
+				fmt.Fprintf(w, "Description: %s\n", doc.Description)
+				fmt.Fprintf(w, "HTTP Status: %d\n", doc.HTTPStatus)
+				fmt.Fprintf(w, "Example:     %s\n\n", doc.Example)
+
+				totalCodes++
+			}
+		}
+
+		fmt.Fprintf(w, "Total Error Codes: %d\n", totalCodes)
+		return
+	}
+
+	// Get all available categories
+	allCategories := make([]string, 0, len(categories))
+	for category := range categories {
+		allCategories = append(allCategories, category)
+	}
+	sort.Strings(allCategories)
+
+	// Get all available HTTP status codes
+	httpStatuses := make(map[int]string)
+	for _, doc := range errors.ErrorCodeDocs {
+		if _, exists := httpStatuses[doc.HTTPStatus]; !exists {
+			httpStatuses[doc.HTTPStatus] = http.StatusText(doc.HTTPStatus)
+		}
+	}
+
+	// Build HTTP status list in order
+	statusList := make([]map[string]interface{}, 0, len(httpStatuses))
+	for code, text := range httpStatuses {
+		statusList = append(statusList, map[string]interface{}{
+			"code": code,
+			"text": text,
+		})
+	}
+
+	// Sort by status code
+	sort.Slice(statusList, func(i, j int) bool {
+		return statusList[i]["code"].(int) < statusList[j]["code"].(int)
+	})
+
+	// Create response with metadata
+	response := map[string]interface{}{
+		"total_error_codes": len(errors.ErrorCodeDocs),
+		"categories":        categories,
+		"available_filters": map[string]interface{}{
+			"categories":    allCategories,
+			"http_statuses": statusList,
+		},
+		"usage": map[string]interface{}{
+			"all_codes":      "/api/v1/errors",
+			"specific_code":  "/api/v1/errors?code=SY001",
+			"by_category":    "/api/v1/errors?category=Entity",
+			"by_http_status": "/api/v1/errors?http_status=404",
+			"plain_text":     "/api/v1/errors?format=text",
+		},
+	}
+
+	s.respondWithJSON(w, http.StatusOK, response, true)
 }
 
 // CountResponse structure for count query responses
