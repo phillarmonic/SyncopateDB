@@ -318,7 +318,7 @@ SyncopateDB provides comprehensive error code documentation to help you understa
 
 | Method | Endpoint                       | Description                                |
 | ------ | ------------------------------ | ------------------------------------------ |
-| GET    | /api/v1/errors                 | List all error codes organized by category |
+| GET    | /api/v1/errors_codes           | List all error codes organized by category |
 | GET    | /api/v1/errors?code=SY001      | Get details about a specific error code    |
 | GET    | /api/v1/errors?category=Entity | Filter error codes by category             |
 | GET    | /api/v1/errors?http_status=404 | Filter error codes by HTTP status          |
