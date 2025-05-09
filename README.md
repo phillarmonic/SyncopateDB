@@ -919,10 +919,10 @@ To explore all available error codes and their meanings:
 
 ```bash
 # Get all error codes organized by category
-curl -X GET http://localhost:8080/api/v1/errors
+curl -X GET http://localhost:8080/api/v1/error_codes
 
 # Get all error codes in plain text format
-curl -X GET "http://localhost:8080/api/v1/errors?format=text"
+curl -X GET "http://localhost:8080/api/v1/error_codes?format=text"
 ```
 
 #### Looking Up Specific Error Codes
@@ -931,7 +931,7 @@ When you receive an error with a specific code (e.g., SY201), you can look up it
 
 ```bash
 # Get details for a specific error code
-curl -X GET "http://localhost:8080/api/v1/errors?code=SY201"
+curl -X GET "http://localhost:8080/api/v1/error_codes?code=SY201"
 ```
 
 This will return detailed information about the error:
@@ -952,10 +952,10 @@ You can filter error codes by category to explore related errors:
 
 ```bash
 # Get all entity-related errors
-curl -X GET "http://localhost:8080/api/v1/errors?category=Entity"
+curl -X GET "http://localhost:8080/api/v1/error_codes?category=Entity"
 
 # Get all query-related errors
-curl -X GET "http://localhost:8080/api/v1/errors?category=Query"
+curl -X GET "http://localhost:8080/api/v1/error_codes?category=Query"
 ```
 
 #### Filtering by HTTP Status Code
@@ -964,10 +964,10 @@ If you're interested in all errors that return a specific HTTP status code:
 
 ```bash
 # Get all errors that return 404 Not Found
-curl -X GET "http://localhost:8080/api/v1/errors?http_status=404"
+curl -X GET "http://localhost:8080/api/v1/error_codes?http_status=404"
 
 # Get all errors that return 409 Conflict
-curl -X GET "http://localhost:8080/api/v1/errors?http_status=409"
+curl -X GET "http://localhost:8080/api/v1/error_codes?http_status=409"
 ```
 
 #### Client-Side Error Handling Example
@@ -1001,7 +1001,7 @@ async function createEntity(entityType, data) {
           console.error(`Error: ${result.message} (Code: ${result.db_code})`);
       }
       // Look up more details about the error
-      const errorDetails = await fetch(`http://localhost:8080/api/v1/errors?code=${result.db_code}`).then(r => r.json());
+      const errorDetails = await fetch(`http://localhost:8080/api/v1/error_codes?code=${result.db_code}`).then(r => r.json());
       console.log('Error details:', errorDetails.description);
       return null;
     }
@@ -1083,8 +1083,6 @@ SyncopateDB is available as an official Docker image, making deployment quick an
 
 To get SyncopateDB up and running with default settings, simply run:
 
-bash
-
 ```bash
 docker run -d --name syncopatedb -p 8080:8080 -v syncopate-data:/data phillarmonic/syncopatedb
 ```
@@ -1099,8 +1097,6 @@ This will:
 ## Configuration Options
 
 You can configure SyncopateDB using environment variables:
-
-bash
 
 ```bash
 docker run -d --name syncopatedb \
@@ -1147,8 +1143,6 @@ SyncopateDB stores all data in the `/data` directory inside the container. For p
 
 ### Using a Named Volume (Recommended)
 
-bash
-
 ```bash
 docker run -d --name syncopatedb \
   -p 8080:8080 \
@@ -1157,8 +1151,6 @@ docker run -d --name syncopatedb \
 ```
 
 ### Using a Host Directory
-
-bash
 
 ```bash
 docker run -d --name syncopatedb \
