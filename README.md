@@ -60,6 +60,14 @@ SyncopateDB is the right choice for you if you require:
 - [Features](#features)
 - [Installation](#installation)
 - [Getting Started](#getting-started)
+  - [Using SyncopateDB with Docker](#using-syncopatedb-with-docker)
+    - [Quick Start](#quick-start)
+    - [Configuration Options](#configuration-options)
+    - [Data Persistence](#data-persistence)
+    - [Docker Compose Example](#docker-compose-example)
+    - [Security Considerations](#security-considerations)
+    - [Accessing the API](#accessing-the-api)
+    - [Container Maintenance](#container-maintenance)
 - [API Reference](#api-reference)
   - [Entity Types](#entity-types)
   - [Entities](#entities)
@@ -80,14 +88,6 @@ SyncopateDB is the right choice for you if you require:
 - [Configuration](#configuration)
 - [The verbose debug mode](#the-verbose-debug-mode)
 - [Persistence](#persistence)
-- [Using SyncopateDB with Docker](#using-syncopatedb-with-docker)
-  - [Quick Start](#quick-start)
-  - [Configuration Options](#configuration-options)
-  - [Data Persistence](#data-persistence)
-  - [Docker Compose Example](#docker-compose-example)
-  - [Security Considerations](#security-considerations)
-  - [Accessing the API](#accessing-the-api)
-  - [Container Maintenance](#container-maintenance)
 - [Docker](#using-syncopatedb-with-docker)
 - [Building from Source](#building-from-source)
 - [License](#license)
@@ -142,6 +142,130 @@ go build ./cmd/main.go
    - `--color-logs`: Enable colorized log output
 
 3. Visit `http://localhost:8080/` to see the welcome message and verify the server is running.
+
+## Using SyncopateDB with Docker
+
+SyncopateDB is available as an official Docker image, making deployment quick and easy across different environments. The image is optimized for performance and security, with multi-architecture support for both amd64 and arm64 platforms.
+
+## Quick Start
+
+To get SyncopateDB up and running with default settings, simply run:
+
+```bash
+docker run -d --name syncopatedb -p 8080:8080 -v syncopate-data:/data phillarmonic/syncopatedb
+```
+
+This will:
+
+- Start SyncopateDB in detached mode
+- Name the container "syncopatedb"
+- Map port 8080 from the container to port 8080 on your host
+- Create a Docker volume named "syncopate-data" for persistent storage
+
+## Configuration Options
+
+You can configure SyncopateDB using environment variables:
+
+```bash
+docker run -d --name syncopatedb \
+  -p 8080:8080 \
+  -v syncopate-data:/data \
+  -e PORT=8080 \
+  -e DEBUG=false \
+  -e LOG_LEVEL=info \
+  -e ENABLE_WAL=true \
+  -e ENABLE_ZSTD=true \
+  -e COLORIZED_LOGS=false \
+  phillarmonic/syncopatedb
+```
+
+### Available Environment Variables
+
+- `PORT`: Server port (default: 8080)
+- `DEBUG`: Enable verbose debug mode (default: false)
+- `LOG_LEVEL`: Logging level (debug, info, warn, error)
+- `ENABLE_WAL`: Enable Write-Ahead Logging (default: true)
+- `ENABLE_ZSTD`: Enable ZSTD compression (default: true)
+- `COLORIZED_LOGS`: Enable colorized logging (default: false)
+
+### Command-line Arguments
+
+You can also pass command-line arguments to the container:
+
+bash
+
+```bash
+docker run -d --name syncopatedb \
+  -p 8080:8080 \
+  -v syncopate-data:/data \
+  phillarmonic/syncopatedb \
+  --port 8080 \
+  --log-level info \
+  --cache-size 20000 \
+  --snapshot-interval 300
+```
+
+## Data Persistence
+
+SyncopateDB stores all data in the `/data` directory inside the container. For persistence, mount this directory to a volume or host path:
+
+### Using a Named Volume (Recommended)
+
+```bash
+docker run -d --name syncopatedb \
+  -p 8080:8080 \
+  -v syncopate-data:/data \
+  phillarmonic/syncopatedb
+```
+
+### Using a Host Directory
+
+```bash
+docker run -d --name syncopatedb \
+  -p 8080:8080 \
+  -v /path/on/host:/data \
+  phillarmonic/syncopatedb
+```
+
+## Docker Compose Example
+
+For production deployments, a Docker Compose configuration is recommended:
+
+yaml
+
+```yaml
+services:
+  syncopatedb:
+    image: phillarmonic/syncopatedb:latest
+    container_name: syncopatedb
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - syncopate-data:/data
+    environment:
+      - PORT=8080
+      - LOG_LEVEL=info
+      - ENABLE_WAL=true
+      - ENABLE_ZSTD=true
+      - COLORIZED_LOGS=false
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  syncopate-data:
+```
+
+Save this to a file named `docker-compose.yml` and run:
+
+bash
+
+```bash
+docker-compose up -d
+```
 
 ## API Reference
 
@@ -1075,131 +1199,7 @@ Key persistence features:
 - Compression support (optional)
 - Automated backup capabilities
 
-# Using SyncopateDB with Docker
-
-SyncopateDB is available as an official Docker image, making deployment quick and easy across different environments. The image is optimized for performance and security, with multi-architecture support for both amd64 and arm64 platforms.
-
-## Quick Start
-
-To get SyncopateDB up and running with default settings, simply run:
-
-```bash
-docker run -d --name syncopatedb -p 8080:8080 -v syncopate-data:/data phillarmonic/syncopatedb
-```
-
-This will:
-
-- Start SyncopateDB in detached mode
-- Name the container "syncopatedb"
-- Map port 8080 from the container to port 8080 on your host
-- Create a Docker volume named "syncopate-data" for persistent storage
-
-## Configuration Options
-
-You can configure SyncopateDB using environment variables:
-
-```bash
-docker run -d --name syncopatedb \
-  -p 8080:8080 \
-  -v syncopate-data:/data \
-  -e PORT=8080 \
-  -e DEBUG=false \
-  -e LOG_LEVEL=info \
-  -e ENABLE_WAL=true \
-  -e ENABLE_ZSTD=true \
-  -e COLORIZED_LOGS=false \
-  phillarmonic/syncopatedb
-```
-
-### Available Environment Variables
-
-- `PORT`: Server port (default: 8080)
-- `DEBUG`: Enable verbose debug mode (default: false)
-- `LOG_LEVEL`: Logging level (debug, info, warn, error)
-- `ENABLE_WAL`: Enable Write-Ahead Logging (default: true)
-- `ENABLE_ZSTD`: Enable ZSTD compression (default: true)
-- `COLORIZED_LOGS`: Enable colorized logging (default: false)
-
-### Command-line Arguments
-
-You can also pass command-line arguments to the container:
-
-bash
-
-```bash
-docker run -d --name syncopatedb \
-  -p 8080:8080 \
-  -v syncopate-data:/data \
-  phillarmonic/syncopatedb \
-  --port 8080 \
-  --log-level info \
-  --cache-size 20000 \
-  --snapshot-interval 300
-```
-
-## Data Persistence
-
-SyncopateDB stores all data in the `/data` directory inside the container. For persistence, mount this directory to a volume or host path:
-
-### Using a Named Volume (Recommended)
-
-```bash
-docker run -d --name syncopatedb \
-  -p 8080:8080 \
-  -v syncopate-data:/data \
-  phillarmonic/syncopatedb
-```
-
-### Using a Host Directory
-
-```bash
-docker run -d --name syncopatedb \
-  -p 8080:8080 \
-  -v /path/on/host:/data \
-  phillarmonic/syncopatedb
-```
-
-## Docker Compose Example
-
-For production deployments, a Docker Compose configuration is recommended:
-
-yaml
-
-```yaml
-services:
-  syncopatedb:
-    image: phillarmonic/syncopatedb:latest
-    container_name: syncopatedb
-    restart: unless-stopped
-    ports:
-      - "8080:8080"
-    volumes:
-      - syncopate-data:/data
-    environment:
-      - PORT=8080
-      - LOG_LEVEL=info
-      - ENABLE_WAL=true
-      - ENABLE_ZSTD=true
-      - COLORIZED_LOGS=false
-    healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-
-volumes:
-  syncopate-data:
-```
-
-Save this to a file named `docker-compose.yml` and run:
-
-bash
-
-```bash
-docker-compose up -d
-```
-
-## Security Considerations
+# Security Considerations
 
 The SyncopateDB Docker image:
 
