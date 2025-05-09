@@ -316,13 +316,13 @@ Database-wide operations can be performed using the following endpoints:
 
 SyncopateDB provides comprehensive error code documentation to help you understand and handle errors in your applications.
 
-| Method | Endpoint                       | Description                                |
-| ------ | ------------------------------ | ------------------------------------------ |
-| GET    | /api/v1/errors_codes           | List all error codes organized by category |
-| GET    | /api/v1/errors?code=SY001      | Get details about a specific error code    |
-| GET    | /api/v1/errors?category=Entity | Filter error codes by category             |
-| GET    | /api/v1/errors?http_status=404 | Filter error codes by HTTP status          |
-| GET    | /api/v1/errors?format=text     | Return error codes in plain text format    |
+| Method | Endpoint                            | Description                                |
+| ------ | ----------------------------------- | ------------------------------------------ |
+| GET    | /api/v1/error_codes                 | List all error codes organized by category |
+| GET    | /api/v1/error_codes?code=SY001      | Get details about a specific error code    |
+| GET    | /api/v1/error_codes?category=Entity | Filter error codes by category             |
+| GET    | /api/v1/error_codes?http_status=404 | Filter error codes by HTTP status          |
+| GET    | /api/v1/error_codes?format=text     | Return error codes in plain text format    |
 
 ## Examples
 
