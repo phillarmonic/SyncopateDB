@@ -1318,6 +1318,22 @@ Steps:
    ./syncopatedb
    ```
 
+## The future of SyncopateDB
+
+SyncopateDB is under active development at the moment.
+
+At the milestone of v1 we expect to have some neat features such as:
+
+- gRPC for faster transaction speeds alongside the REST API.
+
+- Cluster-first approach. Currently, we adopt a monolithic approach to the architecture.
+
+## Contributing
+
+Do you have an idea to a nice feature? Drop it [here](https://github.com/Phillarmonic/SyncopateDB/discussions/new?category=feature-requests)
+
+If you know Go and would like to add a feature, send patches. We're waiting for your PR.
+
 ## License
 
 MIT License
