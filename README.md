@@ -180,7 +180,7 @@ SyncopateDB supports advanced querying with filtering, sorting, and pagination.
 
 ### Database routines
 
-Entities are instances of entity types containing actual data.
+Database-wide operations can be performed using the following endpoints:
 
 | Method | Endpoint                  | Description                  |
 | ------ | ------------------------- | ---------------------------- |
