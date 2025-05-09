@@ -8,4 +8,4 @@
 
 ## Reporting a Vulnerability
 
-Please send an email to phillarmonicsoftware@outlook.com
+Please open a security advisory or send an email to phillarmonicsoftware@outlook.com
