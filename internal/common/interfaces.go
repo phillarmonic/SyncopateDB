@@ -13,8 +13,10 @@ type PersistenceProvider interface {
 	Update(store DatastoreEngine, entityType string, entityID string, data map[string]interface{}) error
 	Delete(store DatastoreEngine, entityID string, entityType string) error
 
-	// Add the UpdateEntityType method
 	UpdateEntityType(store DatastoreEngine, def EntityDefinition) error
+
+	TruncateEntityType(store DatastoreEngine, entityType string) error
+	TruncateDatabase(store DatastoreEngine) error
 
 	// Snapshot and recovery operations
 	TakeSnapshot(store DatastoreEngine) error
@@ -55,6 +57,8 @@ type DatastoreEngine interface {
 	MarkIDAsDeleted(entityType string, id string) error
 	GetDeletedIDs(entityType string) (map[string]bool, error)
 	LoadDeletedIDs(entityType string, deletedIDs map[string]bool) error
+	TruncateEntityType(entityType string) error
+	TruncateDatabase() error
 }
 
 // Entity represents a concrete instance with data

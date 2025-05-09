@@ -158,13 +158,15 @@ Entity types define the structure of your data.
 
 Entities are instances of entity types containing actual data.
 
-| Method | Endpoint                     | Description                      |
-| ------ | ---------------------------- | -------------------------------- |
-| GET    | /api/v1/entities/{type}      | List entities of a specific type |
-| POST   | /api/v1/entities/{type}      | Create a new entity              |
-| GET    | /api/v1/entities/{type}/{id} | Get a specific entity            |
-| PUT    | /api/v1/entities/{type}/{id} | Update a specific entity         |
-| DELETE | /api/v1/entities/{type}/{id} | Delete a specific entity         |
+| Method | Endpoint                         | Description                      |
+| ------ | -------------------------------- | -------------------------------- |
+| GET    | /api/v1/entities/{type}          | List entities of a specific type |
+| POST   | /api/v1/entities/{type}          | Create a new entity              |
+| GET    | /api/v1/entities/{type}/{id}     | Get a specific entity            |
+| PUT    | /api/v1/entities/{type}/{id}     | Update a specific entity         |
+| DELETE | /api/v1/entities/{type}/{id}     | Delete a specific entity         |
+| POST   | /api/v1/entities/{type}/truncate | Truncate all entities of a type  |
+|        |                                  |                                  |
 
 ### Querying
 
@@ -175,6 +177,14 @@ SyncopateDB supports advanced querying with filtering, sorting, and pagination.
 | POST   | /api/v1/query       | Execute a complex query              |
 | POST   | /api/v1/query/count | Count matching entities without data |
 | POST   | /api/v1/query/join  | Execute a query with joins           |
+
+### Database routines
+
+Database-wide operations can be performed using the following endpoints:
+
+| Method | Endpoint                  | Description                  |
+| ------ | ------------------------- | ---------------------------- |
+| POST   | /api/v1/database/truncate | Truncate the entire database |
 
 ### Error Codes
 
@@ -457,7 +467,7 @@ Delete a product:
 curl -X DELETE http://localhost:8080/api/v1/entities/Product/1
 ```
 
-### ### Count Queries
+### Count Queries
 
 SyncopateDB provides a dedicated count API endpoint for efficiently retrieving the number of entities matching specific criteria without loading the actual data. This is particularly valuable for pagination, performance optimization, and UI elements that show counts.
 

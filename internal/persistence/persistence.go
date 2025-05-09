@@ -848,6 +848,13 @@ func (pe *Engine) applyOperationWithErrorHandling(store common.DatastoreEngine, 
 		// Update the entity type definition
 		return store.UpdateEntityType(def)
 
+	case OpTruncateEntityType:
+		// For WAL replay, truncate the specified entity type
+		return store.TruncateEntityType(entityType)
+
+	case OpTruncateDatabase:
+		// For WAL replay, truncate the entire database
+		return store.TruncateDatabase()
 	default:
 		return fmt.Errorf("unknown operation: %d", op)
 	}
@@ -900,4 +907,86 @@ func cleanInternalFields(def *common.EntityDefinition) {
 		// Replace the fields with the cleaned version
 		def.Fields = newFields
 	}
+}
+
+func (pe *Engine) Write(store common.DatastoreEngine, data []byte) error {
+	// Convert the byte data to a string to analyze it
+	operation := string(data)
+
+	// Check if this is a truncate operation
+	if len(operation) > 19 && operation[:19] == "TRUNCATE_ENTITY_TYPE" {
+		// Extract the entity type
+		entityType := operation[20:] // Skip the "TRUNCATE_ENTITY_TYPE:" prefix
+
+		// Check if WAL is disabled in settings
+		if !settings.Config.EnableWAL {
+			// Direct truncate without WAL
+			// We'll use a prefix pattern for entity types
+			prefix := fmt.Sprintf("entity:%s:", entityType)
+
+			return pe.db.Update(func(txn *badger.Txn) error {
+				opts := badger.DefaultIteratorOptions
+				opts.Prefix = []byte(prefix)
+
+				it := txn.NewIterator(opts)
+				defer it.Close()
+
+				// Collect all keys to delete
+				var keysToDelete [][]byte
+				for it.Rewind(); it.Valid(); it.Next() {
+					key := it.Item().Key()
+					keysToDelete = append(keysToDelete, append([]byte{}, key...))
+				}
+
+				// Delete all collected keys
+				for _, key := range keysToDelete {
+					if err := txn.Delete(key); err != nil {
+						return fmt.Errorf("failed to delete entity: %w", err)
+					}
+				}
+
+				return nil
+			})
+		}
+
+		// With WAL enabled, write a special truncate operation to the WAL
+		return pe.WriteWALEntry(OpTruncateEntityType, entityType, "", nil)
+	} else if operation == "TRUNCATE_DATABASE" {
+		// Check if WAL is disabled in settings
+		if !settings.Config.EnableWAL {
+			// Direct truncate without WAL - much more efficient to do a range scan and delete
+			return pe.db.Update(func(txn *badger.Txn) error {
+				opts := badger.DefaultIteratorOptions
+				opts.Prefix = []byte("entity:") // All entity keys start with this prefix
+
+				it := txn.NewIterator(opts)
+				defer it.Close()
+
+				// Collect all keys to delete
+				var keysToDelete [][]byte
+				for it.Rewind(); it.Valid(); it.Next() {
+					key := it.Item().Key()
+					keysToDelete = append(keysToDelete, append([]byte{}, key...))
+				}
+
+				// Delete all collected keys
+				for _, key := range keysToDelete {
+					if err := txn.Delete(key); err != nil {
+						return fmt.Errorf("failed to delete entity: %w", err)
+					}
+				}
+
+				return nil
+			})
+		}
+
+		// With WAL enabled, write a special truncate operation to the WAL
+		return pe.WriteWALEntry(OpTruncateDatabase, "", "", nil)
+	}
+
+	// For other custom operations, store as-is with a generic key
+	key := fmt.Sprintf("custom:%d", time.Now().UnixNano())
+	return pe.db.Update(func(txn *badger.Txn) error {
+		return txn.Set([]byte(key), data)
+	})
 }

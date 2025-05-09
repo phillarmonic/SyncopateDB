@@ -162,12 +162,16 @@ jobs:
         id: get_version
         run: |
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            echo "VERSION=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
-            echo "Using manually specified version: ${{ github.event.inputs.version }}"
-          else
-            echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
-            echo "Using version from tag: ${GITHUB_REF#refs/tags/v}"
-          fi
+              VERSION="${{ github.event.inputs.version }}"
+              echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+              echo "MAJOR_VERSION=$(echo $VERSION | cut -d. -f1)" >> $GITHUB_OUTPUT
+              echo "Using manually specified version: $VERSION"
+            else
+              VERSION="${GITHUB_REF#refs/tags/v}"
+              echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+              echo "MAJOR_VERSION=$(echo $VERSION | cut -d. -f1)" >> $GITHUB_OUTPUT
+              echo "Using version from tag: $VERSION"
+            fi
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -192,6 +196,7 @@ jobs:
           push: true
           tags: |
             phillarmonic/syncopatedb:${{ steps.get_version.outputs.VERSION}}
+            phillarmonic/syncopatedb:${{ steps.get_version.outputs.MAJOR_VERSION}}
             phillarmonic/syncopatedb:latest
           cache-from: type=registry,ref=phillarmonic/syncopatedb:buildcache
           cache-to: type=registry,ref=phillarmonic/syncopatedb:buildcache,mode=max

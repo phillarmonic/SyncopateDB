@@ -134,6 +134,10 @@ func (s *Server) setupRoutes() {
 	api.HandleFunc("/entity-types", s.handleCreateEntityType).Methods(http.MethodPost)
 	api.HandleFunc("/entity-types/{name}", s.handleGetEntityType).Methods(http.MethodGet)
 	api.HandleFunc("/entity-types/{name}", s.handleUpdateEntityType).Methods(http.MethodPut)
+	// Truncate entities of a specific table
+	api.HandleFunc("/entities/{type}/truncate", s.handleTruncateEntityType).Methods(http.MethodPost)
+	// Truncate all entities in the database
+	api.HandleFunc("/database/truncate", s.handleTruncateDatabase).Methods(http.MethodPost)
 
 	// Entities
 	api.HandleFunc("/entities/{type}", s.handleListEntities).Methods(http.MethodGet)
