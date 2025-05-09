@@ -21,6 +21,8 @@ const (
 	OpUpdateEntity
 	OpDeleteEntity
 	OpUpdateEntityType
+	OpTruncateEntityType
+	OpTruncateDatabase
 )
 
 // WALEntry represents a write-ahead log entry
