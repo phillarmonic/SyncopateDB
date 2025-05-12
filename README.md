@@ -6,7 +6,7 @@
 
 [![Docker Pulls](https://img.shields.io/docker/pulls/phillarmonic/syncopatedb)](https://hub.docker.com/r/phillarmonic/syncopatedb)
 
-SyncopateDB is a flexible, NoSQL, lightning fast, lightweight, database optimized for SSD with advanced query capabilities and low latency. It provides a REST API for data storage and retrieval with robust features including indexing, complex queries, and persistence.
+SyncopateDB is a flexible, NoSQL, lightning fast, lightweight, database optimized for SSD with advanced query capabilities and low latency. It provides a REST API (and in the future gRPC connectors) for data storage and retrieval with robust features including indexing, complex queries, and persistence.
 
 ## Key Features
 
