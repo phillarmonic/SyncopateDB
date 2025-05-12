@@ -1,7 +1,7 @@
 # SyncopateDB
 
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/11dd16bf-f625-44cf-aa17-06d027544ce5" alt="syncopate" width="300">
+  <img src="https://github.com/Phillarmonic/SyncopateDB/blob/master/.assets/images/syncopate.png?raw=true" alt="syncopate" width="300">
 </p>
 
 [![Docker Pulls](https://img.shields.io/docker/pulls/phillarmonic/syncopatedb)](https://hub.docker.com/r/phillarmonic/syncopatedb)
