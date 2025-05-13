@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -242,7 +243,7 @@ func (s *Server) Start() error {
 
 	// Wait for the interrupt signal to gracefully shut down the server
 	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, os.Interrupt)
+	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
 	<-quit
 
 	s.logger.Info("SyncopateDB Server is shutting down...")
