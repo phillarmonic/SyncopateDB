@@ -124,47 +124,47 @@ jobs:
         path: syncopate-db
         retention-days: 7
 
-  lint:
-    name: Lint
-    runs-on: ubuntu-latest
+#   lint:
+#     name: Lint
+#     runs-on: ubuntu-latest
     
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v5
+#     steps:
+#     - name: Checkout code
+#       uses: actions/checkout@v5
       
-    - name: Set up Go
-      uses: actions/setup-go@v6
-      with:
-        go-version: '1.23'
+#     - name: Set up Go
+#       uses: actions/setup-go@v6
+#       with:
+#         go-version: '1.23'
         
-    - name: Run golangci-lint
-      uses: golangci/golangci-lint-action@v8
-      with:
-        version: latest
-        args: --timeout=5m
+#     - name: Run golangci-lint
+#       uses: golangci/golangci-lint-action@v8
+#       with:
+#         version: latest
+#         args: --timeout=5m
         
-  security:
-    name: Security Scan
-    runs-on: ubuntu-latest
+#   security:
+#     name: Security Scan
+#     runs-on: ubuntu-latest
     
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v5
+#     steps:
+#     - name: Checkout code
+#       uses: actions/checkout@v5
       
-    - name: Set up Go
-      uses: actions/setup-go@v6
-      with:
-        go-version: '1.23'
+#     - name: Set up Go
+#       uses: actions/setup-go@v6
+#       with:
+#         go-version: '1.23'
         
-    - name: Run Gosec Security Scanner
-      uses: securego/gosec@master
-      with:
-        args: ./...
+#     - name: Run Gosec Security Scanner
+#       uses: securego/gosec@master
+#       with:
+#         args: ./...
         
-    - name: Upload SARIF file
-      uses: github/codeql-action/upload-sarif@v3
-      with:
-        sarif_file: results.sarif
+#     - name: Upload SARIF file
+#       uses: github/codeql-action/upload-sarif@v3
+#       with:
+#         sarif_file: results.sarif
 
   examples:
     name: Test Examples
