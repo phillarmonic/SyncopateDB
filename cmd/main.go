@@ -3,11 +3,12 @@ package main
 import (
 	"flag"
 	"fmt"
-	"github.com/phillarmonic/syncopate-db/internal/about"
-	"github.com/phillarmonic/syncopate-db/internal/monitoring"
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/phillarmonic/syncopate-db/internal/about"
+	"github.com/phillarmonic/syncopate-db/internal/monitoring"
 
 	"github.com/sirupsen/logrus"
 
