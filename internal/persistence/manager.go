@@ -70,9 +70,16 @@ func (m *Manager) Close() error {
 	// Stop garbage collection if running
 	m.StopGarbageCollection()
 
-	// Take final snapshot
-	if err := m.ForceSnapshot(); err != nil {
-		m.logger.Warnf("Failed to take final snapshot on close: %v", err)
+	// Take final snapshot (only if engine is set and not closed)
+	m.mu.RLock()
+	engine := m.engine
+	m.mu.RUnlock()
+
+	if engine != nil {
+		if err := m.ForceSnapshot(); err != nil {
+			// Only log as warning, don't fail the close operation
+			m.logger.Warnf("Failed to take final snapshot on close: %v", err)
+		}
 	}
 
 	// Close database

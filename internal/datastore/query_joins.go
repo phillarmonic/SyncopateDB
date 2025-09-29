@@ -94,7 +94,7 @@ func (qs *QueryService) normalizeForJoinComparison(value interface{}) interface{
 }
 
 // executeJoin performs a join operation between the main entities and a target entity type
-func (qs *QueryService) executeJoin(entities []common.Entity, join JoinOptions) error {
+func (qs *QueryService) executeJoin(entities []common.Entity, join JoinOptions) ([]common.Entity, error) {
 	// Use proper debug logging that respects the global debug setting
 	logDebug := func(format string, args ...interface{}) {
 		// Only log if debug mode is enabled in settings
@@ -139,7 +139,7 @@ func (qs *QueryService) executeJoin(entities []common.Entity, join JoinOptions) 
 	targetEntities, err := qs.Query(targetOpts)
 	if err != nil {
 		logDebug("Error querying join target entities: %v", err)
-		return fmt.Errorf("error querying join target entities: %w", err)
+		return entities, fmt.Errorf("error querying join target entities: %w", err)
 	}
 	logDebug("Found %d target entities", len(targetEntities))
 
@@ -179,7 +179,17 @@ func (qs *QueryService) executeJoin(entities []common.Entity, join JoinOptions) 
 		// Initialize the join results map for this entity
 		joinResults[i] = make(map[string]interface{})
 
-		localValue, exists := entities[i].Fields[join.LocalField]
+		var localValue interface{}
+		var exists bool
+
+		// Handle special case where local field is "id"
+		if join.LocalField == "id" {
+			localValue = entities[i].ID
+			exists = true
+		} else {
+			localValue, exists = entities[i].Fields[join.LocalField]
+		}
+
 		if !exists {
 			logDebug("Local field '%s' not found in entity %s", join.LocalField, entities[i].ID)
 			noValueCount++
@@ -266,20 +276,9 @@ func (qs *QueryService) executeJoin(entities []common.Entity, join JoinOptions) 
 			}
 		}
 
-		// Replace the original slice with our filtered copies
-		for i := 0; i < len(finalEntities) && i < len(entities); i++ {
-			entities[i] = finalEntities[i]
-		}
-
-		// Update the slice length by re-slicing
-		if len(finalEntities) < len(entities) {
-			// Clear the remaining elements to avoid memory leaks
-			for i := len(finalEntities); i < len(entities); i++ {
-				entities[i] = common.Entity{}
-			}
-		}
-
-		logDebug("Inner join: filtered from %d to %d entities", initialCount, len(finalEntities))
+		// For inner join, return only the entities that had matches
+		entities = finalEntities
+		logDebug("Inner join: filtered from %d to %d entities", initialCount, len(entities))
 	} else {
 		// For outer joins, apply the join results to copies of the original entities
 		for i := range entities {
@@ -305,7 +304,7 @@ func (qs *QueryService) executeJoin(entities []common.Entity, join JoinOptions) 
 		}
 	}
 
-	return nil
+	return entities, nil
 }
 
 // filterJoinFields creates a filtered map of entity fields based on include/exclude lists

@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"encoding/gob"
 	"fmt"
-	"github.com/phillarmonic/syncopate-db/internal/settings"
 	"io"
 	"os"
 	"path/filepath"
@@ -13,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/phillarmonic/syncopate-db/internal/settings"
 
 	"github.com/dgraph-io/badger/v4"
 	"github.com/klauspost/compress/zstd"
@@ -37,6 +38,7 @@ type Engine struct {
 	walSequence      uint64     // Last used WAL sequence number
 	walSeqMutex      sync.Mutex // Mutex specifically for sequence number
 	currentTxns      map[string]*Transaction
+	closed           bool // Flag to track if engine is closed
 	txnMu            sync.Mutex
 }
 
@@ -149,11 +151,22 @@ func NewPersistenceEngine(config Config) (*Engine, error) {
 // Close closes the persistence engine
 func (pe *Engine) Close() error {
 	pe.mu.Lock()
+	defer pe.mu.Unlock()
+
+	// Check if already closed
+	if pe.closed {
+		return nil
+	}
+
+	// Mark as closed
+	pe.closed = true
 
 	// Stop the snapshot routine if running
 	if pe.snapshotTicker != nil {
 		pe.snapshotTicker.Stop()
+		pe.snapshotTicker = nil
 		close(pe.stopSnapshot)
+		pe.stopSnapshot = nil
 	}
 
 	// Get references to resources that need to be closed
@@ -161,21 +174,28 @@ func (pe *Engine) Close() error {
 	decompressor := pe.decompressor
 	db := pe.db
 
-	// Clear references before releasing lock
+	// Clear references
 	pe.compressor = nil
 	pe.decompressor = nil
 	pe.db = nil
 
+	// Close resources (release lock temporarily to avoid deadlock)
 	pe.mu.Unlock()
 
-	// Close resources without holding the lock
 	if compressor != nil {
 		compressor.Close()
 	}
 	if decompressor != nil {
 		decompressor.Close()
 	}
-	return db.Close()
+
+	var err error
+	if db != nil {
+		err = db.Close()
+	}
+
+	pe.mu.Lock()
+	return err
 }
 
 // Compress compresses data using zstd if enabled, otherwise returns the original data
@@ -196,6 +216,14 @@ func (pe *Engine) Decompress(data []byte) ([]byte, error) {
 
 // TakeSnapshot creates a full snapshot of the current state
 func (pe *Engine) TakeSnapshot(store common.DatastoreEngine) error {
+	// Check if engine is closed
+	pe.mu.RLock()
+	if pe.closed || pe.db == nil {
+		pe.mu.RUnlock()
+		return fmt.Errorf("persistence engine is closed")
+	}
+	pe.mu.RUnlock()
+
 	// Get the current timestamp and create keys outside the lock
 	timestamp := time.Now().UnixNano()
 	snapshotKey := fmt.Sprintf("snapshot:%d", timestamp)
