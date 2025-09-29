@@ -1,6 +1,8 @@
 package datastore
 
 import (
+	"sort"
+	"strconv"
 	"testing"
 	"time"
 
@@ -424,6 +426,13 @@ func TestIDGenerationStrategies(t *testing.T) {
 	if len(entities) != 3 {
 		t.Errorf("Expected 3 entities, got %d", len(entities))
 	}
+
+	// Sort entities by ID to ensure consistent order
+	sort.Slice(entities, func(i, j int) bool {
+		idI, _ := strconv.Atoi(entities[i].ID)
+		idJ, _ := strconv.Atoi(entities[j].ID)
+		return idI < idJ
+	})
 
 	// Check that IDs are sequential
 	expectedIDs := []string{"1", "2", "3"}

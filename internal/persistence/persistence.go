@@ -165,8 +165,10 @@ func (pe *Engine) Close() error {
 	if pe.snapshotTicker != nil {
 		pe.snapshotTicker.Stop()
 		pe.snapshotTicker = nil
-		close(pe.stopSnapshot)
-		pe.stopSnapshot = nil
+		if pe.stopSnapshot != nil {
+			close(pe.stopSnapshot)
+			pe.stopSnapshot = nil
+		}
 	}
 
 	// Get references to resources that need to be closed
@@ -398,15 +400,36 @@ func (pe *Engine) LoadLatestSnapshot(store common.DatastoreEngine) error {
 
 // startSnapshotRoutine starts the periodic snapshot routine
 func (pe *Engine) startSnapshotRoutine() {
+	pe.mu.Lock()
 	pe.snapshotTicker = time.NewTicker(pe.snapshotInterval)
+	ticker := pe.snapshotTicker
+	stopChan := pe.stopSnapshot
+	pe.mu.Unlock()
+
 	go func() {
+		defer func() {
+			// Clean up ticker when goroutine exits
+			if ticker != nil {
+				ticker.Stop()
+			}
+		}()
+
 		for {
 			select {
-			case <-pe.snapshotTicker.C:
+			case <-ticker.C:
+				// Check if engine is closed before proceeding
+				pe.mu.RLock()
+				closed := pe.closed
+				pe.mu.RUnlock()
+
+				if closed {
+					return
+				}
+
 				// We need a reference to the datastore to snapshot it
 				// This will be provided when the snapshot is triggered from the Manager
 				pe.logger.Debug("Snapshot interval reached, waiting for snapshot to be triggered")
-			case <-pe.stopSnapshot:
+			case <-stopChan:
 				pe.logger.Debug("Stopping snapshot routine")
 				return
 			}

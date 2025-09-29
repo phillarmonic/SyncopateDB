@@ -102,4 +102,4 @@ tmp
 paste.txt
 
 spec/*
-*.html
+coverage.html

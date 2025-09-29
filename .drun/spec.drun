@@ -9,8 +9,12 @@ task "default" means "Welcome":
 	success "This is the SyncopateDB drun spec."
 
 task "test" means "Runs unit tests / integration tests":
-	info "Executing tests..."
-	run "go test ./..."
+	info "Executing comprehensive test suite..."
+	info "Running all test routines with coverage and race detection"
+	run "go test -v -race -coverprofile=coverage.out ./..."
+	info "Generating coverage report"
+	run "go tool cover -html=coverage.out -o coverage.html"
+	success "All tests completed successfully. Coverage report generated at coverage.html"
 
 task "lint" means "Build the project":
 	info "Running golangci-lint"

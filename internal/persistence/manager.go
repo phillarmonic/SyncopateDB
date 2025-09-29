@@ -119,12 +119,31 @@ func (m *Manager) StartGarbageCollection(interval time.Duration) {
 
 	m.logger.Info("Starting automatic garbage collection")
 	m.gcTicker = time.NewTicker(interval)
+	ticker := m.gcTicker
+	stopChan := m.stopGC
+
 	go func() {
+		defer func() {
+			// Clean up ticker when goroutine exits
+			if ticker != nil {
+				ticker.Stop()
+			}
+		}()
+
 		for {
 			select {
-			case <-m.gcTicker.C:
+			case <-ticker.C:
+				// Check if GC is still running before proceeding
+				m.mu.RLock()
+				gcTicker := m.gcTicker
+				m.mu.RUnlock()
+
+				if gcTicker == nil {
+					return
+				}
+
 				m.runGarbageCollectionCycle()
-			case <-m.stopGC:
+			case <-stopChan:
 				m.logger.Debug("Stopping garbage collection routine")
 				return
 			}
@@ -134,11 +153,16 @@ func (m *Manager) StartGarbageCollection(interval time.Duration) {
 
 // StopGarbageCollection stops the periodic garbage collection
 func (m *Manager) StopGarbageCollection() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	if m.gcTicker != nil {
 		m.gcTicker.Stop()
-		close(m.stopGC)
+		if m.stopGC != nil {
+			close(m.stopGC)
+			m.stopGC = nil
+		}
 		m.gcTicker = nil
-		m.stopGC = make(chan struct{})
 	}
 }
 

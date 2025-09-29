@@ -616,6 +616,9 @@ func TestJoinSelectStrategies(t *testing.T) {
 					JoinType:       JoinTypeLeft,
 					ResultField:    "book",
 					SelectStrategy: "first",
+					Filters: []Filter{
+						{Field: "title", Operator: "eq", Value: "Book One"},
+					},
 				},
 			},
 		})
