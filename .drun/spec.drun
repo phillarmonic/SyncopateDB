@@ -1,0 +1,31 @@
+# drun (do-run) a fast, semantic task runner. Effortless tasks, serious speed.
+# Learn more at https://github.com/phillarmonic/drun
+
+version: 2.0
+
+project "syncopate-db" version "1.0":
+
+task "default" means "Welcome":
+	success "This is the SyncopateDB drun spec."
+
+task "test" means "Runs unit tests / integration tests":
+	info "Executing comprehensive test suite..."
+	info "Running all test routines with coverage and race detection"
+	run "go test -v -race -coverprofile=coverage.out ./..."
+	info "Generating coverage report"
+	run "go tool cover -html=coverage.out -o coverage.html"
+	success "All tests completed successfully. Coverage report generated at coverage.html"
+
+task "lint" means "Build the project":
+	info "Running golangci-lint"
+	run "golangci-lint run"
+
+task "run" means "Runs the api-based SyncopateDB":
+	info "Starting the SyncopateDB"
+	run "go run cmd/main.go"
+
+task "debug-build" means "Builds the SyncopateDB binary":
+	run "go build -o bin/syncopatedb cmd/main.go"
+
+task "debug-docker-build" means "Builds the Docker variant of the SyncopateDB":
+	run "docker build -f docker/Dockerfile -t syncopatedb-debug:latest ."

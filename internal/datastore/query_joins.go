@@ -2,11 +2,12 @@ package datastore
 
 import (
 	"fmt"
-	"github.com/phillarmonic/syncopate-db/internal/common"
-	"github.com/phillarmonic/syncopate-db/internal/settings"
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/phillarmonic/syncopate-db/internal/common"
+	"github.com/phillarmonic/syncopate-db/internal/settings"
 )
 
 // normalizeForJoinComparison normalizes values for consistent comparison in joins
@@ -93,7 +94,7 @@ func (qs *QueryService) normalizeForJoinComparison(value interface{}) interface{
 }
 
 // executeJoin performs a join operation between the main entities and a target entity type
-func (qs *QueryService) executeJoin(entities []common.Entity, join JoinOptions) error {
+func (qs *QueryService) executeJoin(entities []common.Entity, join JoinOptions) ([]common.Entity, error) {
 	// Use proper debug logging that respects the global debug setting
 	logDebug := func(format string, args ...interface{}) {
 		// Only log if debug mode is enabled in settings
@@ -102,9 +103,21 @@ func (qs *QueryService) executeJoin(entities []common.Entity, join JoinOptions) 
 		}
 	}
 
-	// The default join type is inner if not specified
-	if join.Type == "" {
-		join.Type = "inner"
+	// Handle backward compatibility and set defaults
+	joinType := join.JoinType
+	if joinType == "" {
+		joinType = join.Type // Legacy field
+	}
+	if joinType == "" {
+		joinType = JoinTypeInner // Default to inner join
+	}
+
+	resultField := join.ResultField
+	if resultField == "" {
+		resultField = join.As // Legacy field
+	}
+	if resultField == "" {
+		resultField = join.EntityType // Default to entity type name
 	}
 
 	// Default select strategy is "first" if not specified
@@ -112,8 +125,8 @@ func (qs *QueryService) executeJoin(entities []common.Entity, join JoinOptions) 
 		join.SelectStrategy = "first"
 	}
 
-	logDebug("Starting join: %s -> %s (local: %s, foreign: %s, as: %s)",
-		join.EntityType, join.ForeignField, join.LocalField, join.As)
+	logDebug("Starting join: %s -> %s (local: %s, foreign: %s, result: %s, type: %s)",
+		join.EntityType, join.ForeignField, join.LocalField, resultField, joinType)
 
 	// Execute a query to get the target entities
 	targetOpts := QueryOptions{
@@ -126,7 +139,7 @@ func (qs *QueryService) executeJoin(entities []common.Entity, join JoinOptions) 
 	targetEntities, err := qs.Query(targetOpts)
 	if err != nil {
 		logDebug("Error querying join target entities: %v", err)
-		return fmt.Errorf("error querying join target entities: %w", err)
+		return entities, fmt.Errorf("error querying join target entities: %w", err)
 	}
 	logDebug("Found %d target entities", len(targetEntities))
 
@@ -166,11 +179,21 @@ func (qs *QueryService) executeJoin(entities []common.Entity, join JoinOptions) 
 		// Initialize the join results map for this entity
 		joinResults[i] = make(map[string]interface{})
 
-		localValue, exists := entities[i].Fields[join.LocalField]
+		var localValue interface{}
+		var exists bool
+
+		// Handle special case where local field is "id"
+		if join.LocalField == "id" {
+			localValue = entities[i].ID
+			exists = true
+		} else {
+			localValue, exists = entities[i].Fields[join.LocalField]
+		}
+
 		if !exists {
 			logDebug("Local field '%s' not found in entity %s", join.LocalField, entities[i].ID)
 			noValueCount++
-			if join.Type == "inner" {
+			if joinType == JoinTypeInner {
 				// For inner joins, mark entities that don't have the join field for exclusion
 				excludedEntities[i] = true
 				logDebug("Marking entity %s for exclusion (inner join, missing local field)", entities[i].ID)
@@ -193,7 +216,7 @@ func (qs *QueryService) executeJoin(entities []common.Entity, join JoinOptions) 
 			logDebug("No matches found for entity %s with normalized local value %v",
 				entities[i].ID, normalizedLocalValue)
 			noMatchCount++
-			if join.Type == "inner" {
+			if joinType == JoinTypeInner {
 				// For inner joins, mark entities that don't have matches for exclusion
 				excludedEntities[i] = true
 				logDebug("Marking entity %s for exclusion (inner join, no matches)", entities[i].ID)
@@ -210,7 +233,7 @@ func (qs *QueryService) executeJoin(entities []common.Entity, join JoinOptions) 
 		case "first":
 			// Just select the first match
 			logDebug("Using 'first' strategy: selecting first match for entity %s", entities[i].ID)
-			joinResults[i][join.As] = qs.filterJoinFields(matches[0], join.IncludeFields, join.ExcludeFields)
+			joinResults[i][resultField] = qs.filterJoinFields(matches[0], join.IncludeFields, join.ExcludeFields)
 		case "all":
 			// Select all matches
 			logDebug("Using 'all' strategy: selecting all %d matches for entity %s", len(matches), entities[i].ID)
@@ -218,7 +241,7 @@ func (qs *QueryService) executeJoin(entities []common.Entity, join JoinOptions) 
 			for j, match := range matches {
 				joinedEntities[j] = qs.filterJoinFields(match, join.IncludeFields, join.ExcludeFields)
 			}
-			joinResults[i][join.As] = joinedEntities
+			joinResults[i][resultField] = joinedEntities
 		}
 	}
 
@@ -226,10 +249,9 @@ func (qs *QueryService) executeJoin(entities []common.Entity, join JoinOptions) 
 		len(entities), matchCount, noValueCount, noMatchCount)
 
 	// For inner joins, create a new filtered list
-	if join.Type == "inner" {
+	if joinType == JoinTypeInner {
 		initialCount := len(entities)
 		finalEntities := make([]common.Entity, 0, len(entities))
-		finalJoinResults := make([]map[string]interface{}, 0, len(entities))
 
 		for i, entity := range entities {
 			if !excludedEntities[i] {
@@ -251,20 +273,12 @@ func (qs *QueryService) executeJoin(entities []common.Entity, join JoinOptions) 
 				}
 
 				finalEntities = append(finalEntities, entityCopy)
-				finalJoinResults = append(finalJoinResults, joinResults[i])
 			}
 		}
 
-		// Update the original slice with our filtered copies
-		copy(entities, finalEntities)
-
-		// Truncate the slice to the new length
-		finalCount := len(finalEntities)
-		if finalCount < len(entities) {
-			entities = entities[:finalCount]
-		}
-
-		logDebug("Inner join: filtered from %d to %d entities", initialCount, finalCount)
+		// For inner join, return only the entities that had matches
+		entities = finalEntities
+		logDebug("Inner join: filtered from %d to %d entities", initialCount, len(entities))
 	} else {
 		// For outer joins, apply the join results to copies of the original entities
 		for i := range entities {
@@ -290,7 +304,7 @@ func (qs *QueryService) executeJoin(entities []common.Entity, join JoinOptions) 
 		}
 	}
 
-	return nil
+	return entities, nil
 }
 
 // filterJoinFields creates a filtered map of entity fields based on include/exclude lists

@@ -3,9 +3,6 @@ package api
 import (
 	"context"
 	"fmt"
-	"github.com/klauspost/compress/zstd"
-	"github.com/phillarmonic/syncopate-db/internal/monitoring"
-	"github.com/phillarmonic/syncopate-db/internal/settings"
 	"net/http"
 	"os"
 	"os/signal"
@@ -14,6 +11,10 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/klauspost/compress/zstd"
+	"github.com/phillarmonic/syncopate-db/internal/monitoring"
+	"github.com/phillarmonic/syncopate-db/internal/settings"
 
 	"github.com/gorilla/mux"
 	"github.com/rs/cors"
@@ -119,6 +120,11 @@ func NewServer(engine common.DatastoreEngine, queryService *datastore.QueryServi
 
 	server.setupRoutes()
 	return server
+}
+
+// Handler returns the HTTP handler for the server (for testing purposes)
+func (s *Server) Handler() http.Handler {
+	return s.router
 }
 
 // setupRoutes configures the API routes

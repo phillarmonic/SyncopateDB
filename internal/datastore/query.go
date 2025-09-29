@@ -3,11 +3,12 @@ package datastore
 import (
 	"errors"
 	"fmt"
-	"github.com/phillarmonic/syncopate-db/internal/settings"
 	"reflect"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/phillarmonic/syncopate-db/internal/settings"
 
 	"github.com/phillarmonic/syncopate-db/internal/common"
 )
@@ -669,7 +670,9 @@ func (qs *QueryService) ExecutePaginatedQuery(options QueryOptions) (*PaginatedR
 
 		// Process joins on the copies
 		for _, join := range options.Joins {
-			if err := qs.executeJoin(resultCopies, join); err != nil {
+			var err error
+			resultCopies, err = qs.executeJoin(resultCopies, join)
+			if err != nil {
 				return nil, fmt.Errorf("join error: %w", err)
 			}
 		}
@@ -756,7 +759,9 @@ func (qs *QueryService) ExecuteQueryWithJoins(options QueryOptions) (*PaginatedR
 
 	// Process joins on the copied entities
 	for _, join := range options.Joins {
-		if err := qs.executeJoin(copiedEntities, join); err != nil {
+		var err error
+		copiedEntities, err = qs.executeJoin(copiedEntities, join)
+		if err != nil {
 			return nil, fmt.Errorf("join error: %w", err)
 		}
 	}

@@ -4,10 +4,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/phillarmonic/syncopate-db/internal/common"
 	"reflect"
 	"strings"
 	"time"
+
+	"github.com/phillarmonic/syncopate-db/internal/common"
 )
 
 // validateEntityData validates entity data against its definition
@@ -131,6 +132,14 @@ func validateFieldType(fieldType string, value interface{}) error {
 				return nil
 			}
 			return errors.New("value is not a float")
+		}
+	case TypeArray:
+		if _, ok := value.([]interface{}); !ok {
+			return errors.New("value is not an array")
+		}
+	case TypeObject:
+		if _, ok := value.(map[string]interface{}); !ok {
+			return errors.New("value is not an object")
 		}
 	default:
 		return fmt.Errorf("unsupported field type: %s", fieldType)
