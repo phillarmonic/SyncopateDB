@@ -3,11 +3,12 @@ package datastore
 import (
 	"errors"
 	"fmt"
-	"github.com/phillarmonic/syncopate-db/internal/settings"
 	"reflect"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/phillarmonic/syncopate-db/internal/settings"
 
 	"github.com/phillarmonic/syncopate-db/internal/common"
 )
