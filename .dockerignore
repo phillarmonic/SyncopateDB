@@ -1,9 +1,65 @@
-data
-.github
-bundle
+# Git
+.git
 .gitignore
-.dockerfile
-README.md
+.gitattributes
+
+# CI/CD
+.github
+.golangci.yml
+
+# Documentation
+*.md
+docs/
+
+# IDE
 .vscode
 .idea
-.git
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+syncopate-db
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test files
+*_test.go
+testdata/
+coverage*.out
+benchmark-results.txt
+
+# Data directories
+data/
+*.db
+*.log
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Node modules (if any)
+node_modules/
+
+# Examples (not needed in production image)
+examples/
+
+# Scripts
+*.sh
+!docker/*.sh
+
+# Development files
+.env
+.env.local
+.env.development
+.env.test
+
+# Cache
+.cache/
