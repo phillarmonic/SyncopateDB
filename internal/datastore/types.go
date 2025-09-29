@@ -12,6 +12,8 @@ const (
 	TypeJSON     = "json"
 	TypeInteger  = "integer"
 	TypeFloat    = "float"
+	TypeArray    = "array"  // Arrays of values
+	TypeObject   = "object" // JSON objects (map[string]interface{})
 )
 
 // Filter types for queries
@@ -35,7 +37,7 @@ const (
 // QueryOptions defines parameters for running a query
 type QueryOptions struct {
 	EntityType string              `json:"entityType"`
-	Filters    []QueryFilter       `json:"filters"`
+	Filters    []Filter            `json:"filters"`
 	Limit      int                 `json:"limit"`
 	Offset     int                 `json:"offset"`
 	OrderBy    string              `json:"orderBy"`
@@ -44,8 +46,8 @@ type QueryOptions struct {
 	Joins      []JoinOptions       `json:"joins"`
 }
 
-// QueryFilter represents a filter condition
-type QueryFilter struct {
+// Filter represents a filter condition
+type Filter struct {
 	Field    string      `json:"field"`
 	Operator string      `json:"operator"`
 	Value    interface{} `json:"value"`
@@ -68,14 +70,24 @@ type PaginatedResponse struct {
 	Data       []common.Entity `json:"data"`
 }
 
+// Join types
+const (
+	JoinTypeInner = "inner"
+	JoinTypeLeft  = "left"
+)
+
 type JoinOptions struct {
-	EntityType     string        `json:"entityType"`     // The entity type to join with
-	LocalField     string        `json:"localField"`     // Field in the main entity
-	ForeignField   string        `json:"foreignField"`   // Field in the joined entity
-	As             string        `json:"as"`             // Alias for the joined data
-	Filters        []QueryFilter `json:"filters"`        // Optional filters on the joined entity
-	IncludeFields  []string      `json:"includeFields"`  // Fields to include (empty = all)
-	ExcludeFields  []string      `json:"excludeFields"`  // Fields to exclude
-	Type           string        `json:"type"`           // Join type: "inner", "left"
-	SelectStrategy string        `json:"selectStrategy"` // "first", "all"
+	EntityType    string   `json:"entityType"`    // The entity type to join with
+	LocalField    string   `json:"localField"`    // Field in the main entity
+	ForeignField  string   `json:"foreignField"`  // Field in the joined entity
+	JoinType      string   `json:"joinType"`      // Join type: "inner", "left"
+	ResultField   string   `json:"resultField"`   // Field name for the joined data in results
+	Filters       []Filter `json:"filters"`       // Optional filters on the joined entity
+	IncludeFields []string `json:"includeFields"` // Fields to include (empty = all)
+	ExcludeFields []string `json:"excludeFields"` // Fields to exclude
+
+	// Legacy fields for backward compatibility
+	As             string `json:"as,omitempty"`             // Deprecated: use ResultField
+	Type           string `json:"type,omitempty"`           // Deprecated: use JoinType
+	SelectStrategy string `json:"selectStrategy,omitempty"` // "first", "all" - defaults to "first"
 }

@@ -107,8 +107,17 @@ SyncopateDB is the right choice for you if you require:
 - **Schema Evolution**: Update entity type definitions with compatibility checks
 - **RESTful API**: Easy-to-use HTTP API for all operations
 - **Go Library**: Use SyncopateDB as an embedded database in your Go applications
+- **Thread Safety**: Fully thread-safe for concurrent access from multiple goroutines
 
 ## Installation
+
+### As an Embedded Library
+
+To use SyncopateDB as an embedded library in your Go application:
+
+```bash
+go get github.com/phillarmonic/syncopate-db
+```
 
 ### Using pre-built binaries
 
@@ -123,6 +132,205 @@ go build ./cmd/main.go
 ```
 
 ## Getting Started
+
+### Using as an Embedded Library
+
+SyncopateDB can be used as an embedded database library in your Go applications, providing all the power of SyncopateDB without requiring a separate server process.
+
+#### Basic In-Memory Usage
+
+```go
+package main
+
+import (
+    "fmt"
+    "log"
+
+    "github.com/phillarmonic/syncopate-db/internal/datastore"
+    "github.com/phillarmonic/syncopate-db/internal/common"
+)
+
+func main() {
+    // Create in-memory database
+    db := datastore.NewDataStoreEngine()
+    defer db.Close()
+
+    // Define entity schema
+    userSchema := common.EntityDefinition{
+        Name:        "users",
+        IDGenerator: common.IDTypeAutoIncrement,
+        Fields: []common.FieldDefinition{
+            {Name: "name", Type: "string", Required: true, Indexed: true},
+            {Name: "email", Type: "string", Required: true, Unique: true},
+            {Name: "age", Type: "integer", Nullable: true},
+        },
+    }
+
+    // Register entity type
+    err := db.RegisterEntityType(userSchema)
+    if err != nil {
+        log.Fatal("Failed to register user schema:", err)
+    }
+
+    // Insert data
+    userData := map[string]interface{}{
+        "name":  "John Doe",
+        "email": "john@example.com",
+        "age":   30,
+    }
+
+    err = db.Insert("users", "", userData) // Empty ID for auto-generation
+    if err != nil {
+        log.Fatal("Failed to insert user:", err)
+    }
+
+    // Query data
+    users, err := db.GetAllEntitiesOfType("users")
+    if err != nil {
+        log.Fatal("Failed to get users:", err)
+    }
+
+    fmt.Printf("Found %d users\n", len(users))
+}
+```
+
+#### Persistent Database Usage
+
+```go
+package main
+
+import (
+    "log"
+    "time"
+
+    "github.com/phillarmonic/syncopate-db/internal/datastore"
+    "github.com/phillarmonic/syncopate-db/internal/persistence"
+    "github.com/phillarmonic/syncopate-db/internal/common"
+    "github.com/sirupsen/logrus"
+)
+
+func main() {
+    // Setup logging
+    logger := logrus.New()
+    logger.SetLevel(logrus.InfoLevel)
+
+    // Configure persistence
+    persistenceConfig := persistence.Config{
+        Path:             "./data",
+        CacheSize:        10000,
+        SyncWrites:       true,
+        SnapshotInterval: 10 * time.Minute,
+        Logger:           logger,
+        UseCompression:   true,
+        EnableAutoGC:     true,
+        GCInterval:       5 * time.Minute,
+    }
+
+    // Create persistence manager
+    persistenceManager, err := persistence.NewManager(persistenceConfig)
+    if err != nil {
+        log.Fatal("Failed to create persistence manager:", err)
+    }
+    defer persistenceManager.Close()
+
+    // Create database with persistence
+    db := datastore.NewDataStoreEngine(datastore.EngineConfig{
+        Persistence:       persistenceManager.GetPersistenceProvider(),
+        EnablePersistence: true,
+    })
+    defer db.Close()
+
+    // Set engine in persistence manager
+    persistenceManager.SetEngine(db)
+
+    // Use database as normal...
+}
+```
+
+#### Advanced Querying
+
+```go
+package main
+
+import (
+    "fmt"
+    "log"
+
+    "github.com/phillarmonic/syncopate-db/internal/datastore"
+    "github.com/phillarmonic/syncopate-db/internal/common"
+)
+
+func main() {
+    db := datastore.NewDataStoreEngine()
+    queryService := datastore.NewQueryService(db)
+
+    // Register schema and insert data...
+
+    // Complex query with filtering, sorting, and pagination
+    queryOptions := datastore.QueryOptions{
+        EntityType: "users",
+        Filters: []datastore.Filter{
+            {Field: "age", Operator: datastore.FilterGte, Value: 18},
+            {Field: "name", Operator: datastore.FilterContains, Value: "John"},
+        },
+        OrderBy:   "age",
+        OrderDesc: false,
+        Limit:     10,
+        Offset:    0,
+    }
+
+    response, err := queryService.ExecutePaginatedQuery(queryOptions)
+    if err != nil {
+        log.Fatal("Query failed:", err)
+    }
+
+    fmt.Printf("Found %d users\n", response.Count)
+    for _, entity := range response.Data {
+        // Handle entity...
+    }
+}
+```
+
+#### Query with Joins
+
+```go
+// Query with joins to link related data
+queryOptions := datastore.QueryOptions{
+    EntityType: "posts",
+    Filters: []datastore.Filter{
+        {Field: "published", Operator: datastore.FilterEq, Value: true},
+    },
+    Joins: []datastore.JoinOptions{
+        {
+            EntityType:   "users",
+            LocalField:   "author_id",
+            ForeignField: "id",
+            JoinType:     datastore.JoinTypeLeft,
+            ResultField:  "author",
+        },
+    },
+    OrderBy: "_created_at",
+    Limit:   10,
+}
+
+response, err := queryService.ExecutePaginatedQuery(queryOptions)
+// Handle response...
+```
+
+#### Key Features for Embedded Usage
+
+- **Thread Safety**: Fully thread-safe for concurrent access
+- **Multiple ID Strategies**: auto_increment, uuid, cuid, custom
+- **Advanced Queries**: Filtering, sorting, pagination, joins, fuzzy search
+- **Data Types**: string, integer, float, boolean, datetime, array, object
+- **Persistence**: Optional Badger-based storage with WAL and snapshots
+- **Schema Evolution**: Update entity types with compatibility checks
+- **Memory Efficient**: Strategic caching and optimizations
+- **Error Handling**: Structured error codes for robust applications
+
+For complete examples, see the [examples/](examples/) directory.
+
+### Using as a Server
 
 1. Start the server:
 
