@@ -23,3 +23,9 @@ task "lint" means "Build the project":
 task "run" means "Runs the api-based SyncopateDB":
 	info "Starting the SyncopateDB"
 	run "go run cmd/main.go"
+
+task "debug-build" means "Builds the SyncopateDB binary":
+	run "go build -o bin/syncopatedb cmd/main.go"
+
+task "debug-docker-build" means "Builds the Docker variant of the SyncopateDB":
+	run "docker build -f docker/Dockerfile -t syncopatedb-debug:latest ."
